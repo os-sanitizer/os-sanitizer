@@ -36,18 +36,11 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     let program: &mut KProbe = bpf
-        .program_mut("os_sanitizer_user_path_at_empty_kretprobe")
+        .program_mut("os_sanitizer_complete_walk_kprobe")
         .unwrap()
         .try_into()?;
     program.load()?;
-    program.attach("user_path_at_empty", 0)?;
-
-    let program: &mut KProbe = bpf
-        .program_mut("os_sanitizer_user_path_at_empty_kprobe")
-        .unwrap()
-        .try_into()?;
-    program.load()?;
-    program.attach("user_path_at_empty", 0)?;
+    program.attach("complete_walk", 0)?;
 
     tokio::signal::ctrl_c().await?;
 

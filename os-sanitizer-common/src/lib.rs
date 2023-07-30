@@ -4,14 +4,15 @@ use aya_bpf_cty::uintptr_t;
 
 #[repr(u32)]
 pub enum OsSanitizerError {
-    MISSING_ARG(&'static str, usize) = 1,
-    COULDNT_READ_KERNEL(&'static str, uintptr_t, usize),
-    COULDNT_READ_USER(&'static str, uintptr_t, usize),
-    COULDNT_ACCESS_BUFFER(&'static str),
-    INVALID_UTF8(&'static str),
-    OUT_OF_SPACE(&'static str),
-    RACEFUL_ACCESS(&'static str),
-    IMPOSSIBLE_FILE,
+    MissingArg(&'static str, usize) = 1,
+    CouldntReadKernel(&'static str, uintptr_t, usize),
+    CouldntReadUser(&'static str, uintptr_t, usize),
+    CouldntAccessBuffer(&'static str),
+    InvalidUtf8(&'static str),
+    OutOfSpace(&'static str),
+    RacefulAccess(&'static str),
+    ImpossibleFile,
+    Unreachable,
 }
 
 impl From<OsSanitizerError> for u32 {
