@@ -1,4 +1,3 @@
-#![feature(offset_of)]
 #![no_std]
 #![no_main]
 
@@ -9,24 +8,26 @@ pub static LICENSE: [u8; 4] = *b"GPL\0";
 mod binding;
 
 use crate::binding::nameidata;
-use aya_bpf::bindings::BPF_F_NO_PREALLOC;
 use aya_bpf::cty::uintptr_t;
 use aya_bpf::helpers::{
     bpf_get_current_pid_tgid, bpf_probe_read_kernel, bpf_probe_read_kernel_str_bytes,
 };
 use aya_bpf::macros::kprobe;
 use aya_bpf::macros::map;
-use aya_bpf::maps::HashMap;
+use aya_bpf::maps::PerfEventArray;
 use aya_bpf::programs::ProbeContext;
-use aya_log_ebpf::{error, info, warn};
+use aya_log_ebpf::error;
 use core::hint::unreachable_unchecked;
 use core::mem::size_of;
-use os_sanitizer_common::OsSanitizerError;
+use os_sanitizer_common::{OsSanitizerError, Report};
 
 use os_sanitizer_common::OsSanitizerError::{
     CouldntAccessBuffer, CouldntReadKernel, CouldntReadUser, ImpossibleFile, InvalidUtf8,
     MissingArg, OutOfSpace, RacefulAccess, Unreachable,
 };
+
+#[map(name = "REPORT_QUEUE")]
+pub static REPORT_QUEUE: PerfEventArray<Report> = PerfEventArray::with_max_entries(1024, 0);
 
 #[inline(always)]
 fn emit_error(probe: &ProbeContext, e: OsSanitizerError, name: &str) -> u32 {
@@ -99,30 +100,19 @@ fn kprobe_complete_walk_empty(probe: ProbeContext) -> u32 {
     }
 }
 
-#[repr(C)]
-pub struct FilenameBuf {
-    pub buf: [u8; 1024],
-}
-
-static EMPTY_FILENAME_BUF: FilenameBuf = FilenameBuf { buf: [0; 1024] };
-
-#[map]
-pub static mut FILENAME_BUF: HashMap<u64, FilenameBuf> =
-    HashMap::with_max_entries(1024, BPF_F_NO_PREALLOC);
-
 unsafe fn do_read_kernel<T>(name: &'static str, ptr: *const T) -> Result<T, OsSanitizerError> {
     bpf_probe_read_kernel(ptr)
         .map_err(|_| CouldntReadKernel(name, ptr as uintptr_t, size_of::<T>()))
 }
 
-unsafe fn do_read_kernel_str_bytes(
+unsafe fn do_read_kernel_str_bytes<'a>(
     name: &'static str,
     src: *const u8,
-    dest: &mut [u8],
-) -> Result<(), OsSanitizerError> {
+    dest: &'a mut [u8],
+) -> Result<&'a [u8], OsSanitizerError> {
     match bpf_probe_read_kernel_str_bytes(src, dest) {
-        Ok(_) => Ok(()),
-        Err(_) => Err(CouldntReadKernel(name, src as uintptr_t, dest.len())),
+        Ok(arr) => Ok(arr),
+        Err(_) => Err(CouldntReadKernel(name, src as uintptr_t, 0)),
     }
 }
 
@@ -132,75 +122,21 @@ unsafe fn try_kprobe_complete_walk_empty(ctx: &ProbeContext) -> Result<u32, OsSa
     let inode = do_read_kernel("d_inode", &(*data).inode)?;
     let i_mode = do_read_kernel("i_mode", &(*inode).i_mode)?;
 
-    let filetype = i_mode >> 12;
-
-    let filetype = if filetype == 0x1 {
-        "fifo"
-    } else if filetype == 0x4 {
-        "directory"
-    } else if filetype == 0x8 {
-        "regular file"
-    } else if filetype == 0xC {
-        "socket"
-    } else {
-        return Ok(0);
-    };
-
     let filename = do_read_kernel("filename*", &(*data).name)?;
     let filename = do_read_kernel("filename char*", &(*filename).name)? as *const u8;
 
-    let mut rendered = [0u8; 9];
-
-    let mut ctr = 0;
-    for i in (0..3).rev() {
-        let base = i_mode >> (i * 3);
-        rendered[ctr] = if base & 0b100 != 0 { b'r' } else { b'-' };
-        ctr += 1;
-        rendered[ctr] = if base & 0b010 != 0 { b'w' } else { b'-' };
-        ctr += 1;
-        rendered[ctr] = if base & 0b001 != 0 { b'x' } else { b'-' };
-        ctr += 1;
-    }
-
-    let rendered_ref = core::str::from_utf8_unchecked(&rendered);
-
     let pid_tgid = bpf_get_current_pid_tgid();
 
-    let FilenameBuf { buf } = {
-        FILENAME_BUF
-            .insert(&pid_tgid, &EMPTY_FILENAME_BUF, 0)
-            .map_err(|_| OutOfSpace("filename buf"))?;
-        let ptr = FILENAME_BUF
-            .get_ptr_mut(&pid_tgid)
-            .ok_or(CouldntAccessBuffer("filename"))?;
-        &mut *ptr
+    let mut report = Report {
+        pid_tgid,
+        i_mode,
+        filename: [0; 128],
     };
-    do_read_kernel_str_bytes("name", filename, buf)?;
-    let name_ref = core::str::from_utf8_unchecked(buf);
-    if i_mode & 0b010 != 0 {
-        warn!(
-            ctx,
-            r#"pid {} requested `{}' which has mode {} and is a {}"#,
-            pid_tgid as u32,
-            // i_ino,
-            name_ref,
-            rendered_ref,
-            filetype
-        );
-    } else {
-        info!(
-            ctx,
-            r#"pid {} requested `{}' which has mode {} and is a {}"#,
-            pid_tgid as u32,
-            // i_ino,
-            name_ref,
-            rendered_ref,
-            filetype
-        );
-    }
-    FILENAME_BUF
-        .remove(&pid_tgid)
-        .map_err(|_| RacefulAccess("name removal"))?;
+
+    do_read_kernel_str_bytes("filename", filename, &mut report.filename)?;
+
+    REPORT_QUEUE.output(ctx, &report, 0);
+
     Ok(0)
 }
 

@@ -9,7 +9,7 @@ aya = { git = "https://github.com/aya-rs/aya", features = ["async_tokio"] }
 aya-log = { git = "https://github.com/aya-rs/aya" }
 os-sanitizer-common = { path = "../os-sanitizer-common", features = ["user"] }
 anyhow = "1"
-enum-iterator = "1.4.1"
+bytes = "1"
 env_logger = "0.10"
 libc = "0.2"
 log = "0.4"
