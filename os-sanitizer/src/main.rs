@@ -107,9 +107,9 @@ async fn main() -> Result<(), anyhow::Error> {
                     };
 
                     if i_mode & 0b010 != 0 && i_mode & 0xA000 != 0xA000 {
-                        warn!("pid {pid} requested {filename} (a {filetype}) with permissions {rendered}");
+                        warn!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}");
                     } else {
-                        info!("pid {pid} requested {filename} (a {filetype}) with permissions {rendered}");
+                        info!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}");
                     }
                 }
             }
