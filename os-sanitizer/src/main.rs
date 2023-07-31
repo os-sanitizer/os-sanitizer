@@ -103,14 +103,10 @@ async fn main() -> Result<(), anyhow::Error> {
                         _ => unreachable!(),
                     };
 
-                    if !filename.starts_with("/proc") && !filename.starts_with("/sys") && i_mode & 0b010 != 0 && i_mode & 0xF000 != 0xA000 {
-                        if i_mode & 0xF000 == 0x8000 || i_mode & 0xF000 == 0x4000 {
-                            error!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}");
-                        } else {
-                            warn!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}")
-                        }
+                    if i_mode & 0xF000 == 0x8000 || i_mode & 0xF000 == 0x4000 {
+                        error!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}");
                     } else {
-                        info!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}");
+                        warn!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}")
                     }
                 }
             }
