@@ -9,7 +9,7 @@ pub static LICENSE: [u8; 4] = *b"GPL\0";
 mod binding;
 
 use crate::binding::file;
-use aya_bpf::cty::uintptr_t;
+use aya_bpf::cty::{c_char, uintptr_t};
 use aya_bpf::helpers::{bpf_d_path, bpf_get_current_pid_tgid};
 use aya_bpf::macros::fentry;
 use aya_bpf::macros::map;
@@ -105,21 +105,25 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
     let inode = (*data).f_inode;
     let i_mode = (*inode).i_mode;
 
-    let pid_tgid = bpf_get_current_pid_tgid();
+    if i_mode & 0b010 != 0 && i_mode & 0xF000 != 0xA000 {
+        let pid_tgid = bpf_get_current_pid_tgid();
 
-    let mut report = Report {
-        pid_tgid,
-        i_mode,
-        filename: [0; 256],
-    };
+        let mut report = Report {
+            pid_tgid,
+            i_mode,
+            filename: [0; 256],
+        };
 
-    let len = report.filename.len() as u32;
-    let filename_ptr = report.filename.as_mut_ptr();
-    let path = data as uintptr_t + offset_of!(file, f_path);
+        let len = report.filename.len() as u32;
+        let filename_ptr = report.filename.as_mut_ptr() as *mut c_char;
+        let path = data as uintptr_t + offset_of!(file, f_path);
 
-    bpf_d_path(path as *mut aya_bpf::bindings::path, filename_ptr, len);
+        bpf_d_path(path as *mut aya_bpf::bindings::path, filename_ptr, len);
 
-    REPORT_QUEUE.output(ctx, &report, 0);
+        if !report.filename.starts_with(b"/proc") && !report.filename.starts_with(b"/sys") {
+            REPORT_QUEUE.output(ctx, &report, 0);
+        }
+    }
 
     Ok(0)
 }
