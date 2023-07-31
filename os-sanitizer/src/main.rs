@@ -5,7 +5,7 @@ use aya::{include_bytes_aligned, Bpf, Btf};
 use aya_log::BpfLogger;
 use bytes::BytesMut;
 use log::{debug, error, info, warn};
-use object::{Object, ObjectSection, ObjectSymbol, SymbolKind, SymbolScope, SymbolSection};
+use object::{Object, ObjectSection, ObjectSymbol, SymbolKind};
 use os_sanitizer_common::{FileAccessReport, FunctionInvocationReport};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{c_char, CStr};

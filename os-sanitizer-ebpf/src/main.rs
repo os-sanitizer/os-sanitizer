@@ -146,7 +146,7 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
 fn uprobe_strcpy(probe: ProbeContext) -> u32 {
     match unsafe { try_uprobe_strcpy(&probe) } {
         Ok(res) => res,
-        Err(e) => emit_error(&probe, e, "os_sanitizer_security_file_open_kprobe"),
+        Err(e) => emit_error(&probe, e, "os_sanitizer_strcpy_uprobe"),
     }
 }
 
