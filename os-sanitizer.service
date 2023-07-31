@@ -1,0 +1,13 @@
+[Unit]
+Description=OSSanitizer
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=root
+ExecStart=/usr/local/sbin/os-sanitizer
+
+[Install]
+WantedBy=multi-user.target

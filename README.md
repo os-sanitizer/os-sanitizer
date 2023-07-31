@@ -24,3 +24,20 @@ cargo build
 ```bash
 RUST_LOG=info cargo xtask run
 ```
+
+## Installing as a service
+
+```bash
+cargo xtask build-ebpf --release
+cargo build --release
+sudo cp target/release/os-sanitizer /usr/local/sbin/
+sudo cp os-sanitizer.service /usr/lib/systemd/system/
+sudo systemctl enable os-sanitizer
+sudo service os-sanitizer start
+```
+
+You can then monitor for warnings under:
+
+```bash
+sudo journalctl -b -fu os-sanitizer
+```
