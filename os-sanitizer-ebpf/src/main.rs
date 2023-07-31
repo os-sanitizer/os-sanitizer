@@ -1,3 +1,4 @@
+#![feature(offset_of)]
 #![no_std]
 #![no_main]
 
@@ -7,30 +8,27 @@ pub static LICENSE: [u8; 4] = *b"GPL\0";
 #[allow(nonstandard_style, unused)]
 mod binding;
 
-use crate::binding::nameidata;
+use crate::binding::file;
 use aya_bpf::cty::uintptr_t;
-use aya_bpf::helpers::{
-    bpf_get_current_pid_tgid, bpf_probe_read_kernel, bpf_probe_read_kernel_str_bytes,
-};
-use aya_bpf::macros::kprobe;
+use aya_bpf::helpers::{bpf_d_path, bpf_get_current_pid_tgid};
+use aya_bpf::macros::fentry;
 use aya_bpf::macros::map;
 use aya_bpf::maps::PerfEventArray;
-use aya_bpf::programs::ProbeContext;
+use aya_bpf::programs::FEntryContext;
 use aya_log_ebpf::error;
 use core::hint::unreachable_unchecked;
-use core::mem::size_of;
-use os_sanitizer_common::{OsSanitizerError, Report};
-
+use core::mem::offset_of;
 use os_sanitizer_common::OsSanitizerError::{
     CouldntAccessBuffer, CouldntReadKernel, CouldntReadUser, ImpossibleFile, InvalidUtf8,
     MissingArg, OutOfSpace, RacefulAccess, Unreachable,
 };
+use os_sanitizer_common::{OsSanitizerError, Report};
 
 #[map(name = "REPORT_QUEUE")]
 pub static REPORT_QUEUE: PerfEventArray<Report> = PerfEventArray::with_max_entries(1024, 0);
 
 #[inline(always)]
-fn emit_error(probe: &ProbeContext, e: OsSanitizerError, name: &str) -> u32 {
+fn emit_error(probe: &FEntryContext, e: OsSanitizerError, name: &str) -> u32 {
     match e {
         MissingArg(op, idx) => {
             error!(probe, "{}: Missing arg {} while handling {}", op, idx, name);
@@ -92,48 +90,34 @@ fn emit_error(probe: &ProbeContext, e: OsSanitizerError, name: &str) -> u32 {
     e.into()
 }
 
-#[kprobe(name = "os_sanitizer_complete_walk_kprobe")]
-fn kprobe_complete_walk_empty(probe: ProbeContext) -> u32 {
-    match unsafe { try_kprobe_complete_walk_empty(&probe) } {
+#[fentry(name = "security_file_open")]
+fn fentry_security_file_open(probe: FEntryContext) -> u32 {
+    match unsafe { try_fentry_security_file_open(&probe) } {
         Ok(res) => res,
-        Err(e) => emit_error(&probe, e, "os_sanitizer_complete_walk_kprobe"),
+        Err(e) => emit_error(&probe, e, "os_sanitizer_security_file_open_kprobe"),
     }
 }
 
-unsafe fn do_read_kernel<T>(name: &'static str, ptr: *const T) -> Result<T, OsSanitizerError> {
-    bpf_probe_read_kernel(ptr)
-        .map_err(|_| CouldntReadKernel(name, ptr as uintptr_t, size_of::<T>()))
-}
+#[inline(always)]
+unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
+    let data: *const file = ctx.arg(0);
 
-unsafe fn do_read_kernel_str_bytes<'a>(
-    name: &'static str,
-    src: *const u8,
-    dest: &'a mut [u8],
-) -> Result<&'a [u8], OsSanitizerError> {
-    match bpf_probe_read_kernel_str_bytes(src, dest) {
-        Ok(arr) => Ok(arr),
-        Err(_) => Err(CouldntReadKernel(name, src as uintptr_t, 0)),
-    }
-}
-
-unsafe fn try_kprobe_complete_walk_empty(ctx: &ProbeContext) -> Result<u32, OsSanitizerError> {
-    let data: *const nameidata = ctx.arg(0).ok_or(MissingArg("nameidata", 0))?;
-
-    let inode = do_read_kernel("d_inode", &(*data).inode)?;
-    let i_mode = do_read_kernel("i_mode", &(*inode).i_mode)?;
-
-    let filename = do_read_kernel("filename*", &(*data).name)?;
-    let filename = do_read_kernel("filename char*", &(*filename).name)? as *const u8;
+    let inode = (*data).f_inode;
+    let i_mode = (*inode).i_mode;
 
     let pid_tgid = bpf_get_current_pid_tgid();
 
     let mut report = Report {
         pid_tgid,
         i_mode,
-        filename: [0; 128],
+        filename: [0; 256],
     };
 
-    do_read_kernel_str_bytes("filename", filename, &mut report.filename)?;
+    let len = report.filename.len() as u32;
+    let filename_ptr = report.filename.as_mut_ptr();
+    let path = data as uintptr_t + offset_of!(file, f_path);
+
+    bpf_d_path(path as *mut aya_bpf::bindings::path, filename_ptr, len);
 
     REPORT_QUEUE.output(ctx, &report, 0);
 

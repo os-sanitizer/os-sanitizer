@@ -1,6 +1,6 @@
 #![cfg_attr(not(feature = "user"), no_std)]
 
-use aya_bpf_cty::uintptr_t;
+use aya_bpf_cty::{c_char, uintptr_t};
 
 #[repr(u32)]
 pub enum OsSanitizerError {
@@ -19,7 +19,7 @@ pub enum OsSanitizerError {
 pub struct Report {
     pub pid_tgid: u64,
     pub i_mode: u16,
-    pub filename: [u8; 128],
+    pub filename: [c_char; 256],
 }
 
 #[cfg(feature = "user")]

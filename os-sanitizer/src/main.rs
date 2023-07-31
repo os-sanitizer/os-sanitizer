@@ -1,11 +1,10 @@
 use aya::maps::AsyncPerfEventArray;
-use aya::programs::KProbe;
+use aya::programs::FEntry;
 use aya::util::online_cpus;
-use aya::{include_bytes_aligned, Bpf};
+use aya::{include_bytes_aligned, Bpf, Btf};
 use aya_log::BpfLogger;
 use bytes::BytesMut;
-use libc::c_char;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use os_sanitizer_common::Report;
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,12 +43,10 @@ async fn main() -> Result<(), anyhow::Error> {
         warn!("failed to initialize eBPF logger: {}", e);
     }
 
-    let program: &mut KProbe = bpf
-        .program_mut("os_sanitizer_complete_walk_kprobe")
-        .unwrap()
-        .try_into()?;
-    program.load()?;
-    program.attach("complete_walk", 0)?;
+    let btf = Btf::from_sys_fs()?;
+    let program: &mut FEntry = bpf.program_mut("security_file_open").unwrap().try_into()?;
+    program.load("security_file_open", &btf)?;
+    program.attach()?;
 
     let mut reports = AsyncPerfEventArray::try_from(bpf.take_map("REPORT_QUEUE").unwrap())?;
 
@@ -71,7 +68,7 @@ async fn main() -> Result<(), anyhow::Error> {
                     let report = unsafe { ptr.read_unaligned() };
 
                     let Ok(filename) = (unsafe {
-                        CStr::from_ptr(report.filename.as_ptr() as *const c_char).to_str()
+                        CStr::from_ptr(report.filename.as_ptr()).to_str()
                     }) else {
                         continue;
                     };
@@ -106,8 +103,12 @@ async fn main() -> Result<(), anyhow::Error> {
                         _ => unreachable!(),
                     };
 
-                    if i_mode & 0b010 != 0 && i_mode & 0xA000 != 0xA000 {
-                        warn!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}");
+                    if i_mode & 0b010 != 0 && i_mode & 0xF000 != 0xA000 {
+                        if i_mode & 0xF000 == 0x8000 || i_mode & 0xF000 == 0x4000 {
+                            error!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}");
+                        } else {
+                            warn!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}")
+                        }
                     } else {
                         info!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}");
                     }

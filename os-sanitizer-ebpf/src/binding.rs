@@ -47202,4 +47202,3 @@ pub struct sfp_socket_ops {
         ) -> ::aya_bpf::cty::c_int,
     >,
 }
-
