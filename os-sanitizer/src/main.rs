@@ -5,10 +5,12 @@ use aya::{include_bytes_aligned, Bpf, Btf};
 use aya_log::BpfLogger;
 use bytes::BytesMut;
 use log::{debug, error, info, warn};
-use object::{Object, ObjectSymbol};
+use object::{Object, ObjectSection, ObjectSymbol, SymbolKind, SymbolScope, SymbolSection};
 use os_sanitizer_common::{FileAccessReport, FunctionInvocationReport};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{c_char, CStr};
+use std::ops::Range;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -55,7 +57,10 @@ async fn main() -> Result<(), anyhow::Error> {
         bpf.take_map("STACKTRACES").unwrap(),
     )?);
 
-    let symbols = Arc::new(RwLock::new(HashMap::new()));
+    let symbols = Arc::new(RwLock::new(HashMap::<
+        PathBuf,
+        (Range<u64>, BTreeMap<u64, String>),
+    >::new()));
 
     let keep_going = Arc::new(AtomicBool::new(true));
     let mut tasks = Vec::new();
@@ -134,7 +139,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 while keep_going.load(Ordering::Relaxed) {
                     let events = buf.read_events(&mut buffers).await.unwrap();
                     for buf in buffers.iter_mut().take(events.read) {
-                        let report = unsafe { (buf.as_ptr() as *const FunctionInvocationReport) .read_unaligned() };
+                        let report = unsafe { (buf.as_ptr() as *const FunctionInvocationReport).read_unaligned() };
 
                         let (executable, mut stacktrace) = match report {
                             FunctionInvocationReport::Strcpy {
@@ -153,36 +158,48 @@ async fn main() -> Result<(), anyhow::Error> {
                             },
                         };
 
+                        let mut range = 0..0;
                         if let Ok(path) = which::which(&executable) {
                             let reader = symbols.read().await;
-                            if let Some(map) = reader.get(&path) {
-                                stacktrace.resolve(&map);
+                            if let Some(symdata) = reader.get(&path) {
+                                stacktrace.resolve(&symdata.1);
+                                range = symdata.0.clone();
                             } else {
                                 drop(reader);
                                 let mut writer = symbols.write().await;
 
-                                let map = if let Ok(bin_data) = std::fs::read(&path) {
-                                    if let Ok(obj_file) = object::File::parse(&*bin_data) {
-                                        obj_file.symbols().filter_map(|sym| sym.name().map(|name| (sym.address(), name.to_string())).ok()).collect()
-                                    } else {
-                                        warn!("Couldn't read object for {executable}");
-                                        BTreeMap::new()
+                                let read_symbols = |executable, path| -> (Range<u64>, BTreeMap<u64, String>) {
+                                    if let Ok(bin_data) = std::fs::read(path) {
+                                        if let Ok(obj_file) = object::File::parse(&*bin_data) {
+                                            if let Some(text_section) = obj_file.section_by_name(".text") {
+                                                let range = text_section.address()..(text_section.address() + text_section.size());
+                                                return (range, obj_file.symbols()
+                                                    .filter(|sym| sym.kind() == SymbolKind::Text && sym.is_global() && sym.section_index() == Some(text_section.index()))
+                                                    .filter_map(|sym| sym.name().map(|name| (sym.address(), name.to_string())).ok())
+                                                    .collect());
+                                            }
+                                        }
                                     }
-                                } else {
-                                    warn!("Couldn't read file for {executable}");
-                                    BTreeMap::new()
+                                    warn!("Couldn't read symbols from {executable}");
+                                    (0..0, BTreeMap::new())
                                 };
 
-                                stacktrace.resolve(&map);
-                                writer.insert(path, map);
+                                let symdata = read_symbols(&executable, &path);
+
+                                stacktrace.resolve(&symdata.1);
+                                range = symdata.0.clone();
+                                writer.insert(path, symdata);
                             }
                         }
 
-                        let stacktrace = stacktrace.frames().into_iter().enumerate().map(|(i, entry)| {
-                            if let Some(sym) = &entry.symbol_name {
-                                format!("{i}: {sym}")
-                            } else {
-                                format!("{i}: 0x{:x}", entry.ip)
+                        let stacktrace = stacktrace.frames().into_iter().rev().enumerate().map(|(i, entry)| {
+                            match &entry.symbol_name {
+                                Some(sym) if range.contains(&entry.ip) => {
+                                    format!("{i}: {sym} (0x{:x})", entry.ip)
+                                }
+                                _ => {
+                                    format!("{i}: 0x{:x}", entry.ip)
+                                }
                             }
                         }).collect::<Vec<_>>().join("\n");
 
