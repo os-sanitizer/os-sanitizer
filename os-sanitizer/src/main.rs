@@ -1,14 +1,17 @@
-use aya::maps::AsyncPerfEventArray;
-use aya::programs::FEntry;
+use aya::maps::{AsyncPerfEventArray, StackTraceMap};
+use aya::programs::{FEntry, UProbe};
 use aya::util::online_cpus;
 use aya::{include_bytes_aligned, Bpf, Btf};
 use aya_log::BpfLogger;
 use bytes::BytesMut;
 use log::{debug, error, info, warn};
-use os_sanitizer_common::Report;
+use object::{Object, ObjectSymbol};
+use os_sanitizer_common::{FileAccessReport, FunctionInvocationReport};
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::{c_char, CStr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tokio::{signal, task};
 
 #[tokio::main]
@@ -43,75 +46,165 @@ async fn main() -> Result<(), anyhow::Error> {
         warn!("failed to initialize eBPF logger: {}", e);
     }
 
+    let mut file_reports =
+        AsyncPerfEventArray::try_from(bpf.take_map("FILE_REPORT_QUEUE").unwrap())?;
+    let mut function_reports =
+        AsyncPerfEventArray::try_from(bpf.take_map("FUNCTION_REPORT_QUEUE").unwrap())?;
+
+    let stacktraces = Arc::new(StackTraceMap::try_from(
+        bpf.take_map("STACKTRACES").unwrap(),
+    )?);
+
+    let symbols = Arc::new(RwLock::new(HashMap::new()));
+
+    let keep_going = Arc::new(AtomicBool::new(true));
+    let mut tasks = Vec::new();
+
+    for cpu_id in online_cpus()? {
+        let mut buf = file_reports.open(cpu_id, None)?;
+        {
+            let keep_going = keep_going.clone();
+            tasks.push(task::spawn(async move {
+                let mut buffers = (0..32)
+                    .map(|_| BytesMut::with_capacity(512))
+                    .collect::<Vec<_>>();
+
+                while keep_going.load(Ordering::Relaxed) {
+                    let events = buf.read_events(&mut buffers).await.unwrap();
+                    for buf in buffers.iter_mut().take(events.read) {
+                        let ptr = buf.as_ptr() as *const FileAccessReport;
+                        let report = unsafe { ptr.read_unaligned() };
+
+                        let Ok(filename) = (unsafe {
+                            CStr::from_ptr(report.filename.as_ptr() as *const c_char).to_str()
+                        }) else {
+                            continue;
+                        };
+                        let i_mode = report.i_mode;
+                        let pid = report.pid_tgid as u32;
+
+                        let mut rendered = [0; 9];
+                        for (i, e) in rendered.iter_mut().enumerate() {
+                            let b = if i_mode & (0b1 << (9 - i - 1)) != 0 {
+                                match i % 3 {
+                                    0 => b'r',
+                                    1 => b'w',
+                                    2 => b'x',
+                                    _ => unreachable!(),
+                                }
+                            } else {
+                                b'-'
+                            };
+                            *e = b;
+                        }
+                        let rendered = core::str::from_utf8(&rendered).unwrap();
+
+                        let filetype = i_mode >> 12;
+                        let filetype = match filetype {
+                            0x1 => "fifo",
+                            0x2 => "chardev",
+                            0x4 => "directory",
+                            0x6 => "blockdev",
+                            0x8 => "file",
+                            0xA => "symlink",
+                            0xC => "socket",
+                            _ => unreachable!(),
+                        };
+
+                        if i_mode & 0xF000 == 0x8000 || i_mode & 0xF000 == 0x4000 {
+                            error!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}");
+                        } else {
+                            warn!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}")
+                        }
+                    }
+                }
+            }));
+        }
+
+        let mut buf = function_reports.open(cpu_id, None)?;
+        {
+            let stacktraces = stacktraces.clone();
+            let symbols = symbols.clone();
+            let keep_going = keep_going.clone();
+            tasks.push(task::spawn(async move {
+                let mut buffers = (0..32)
+                    .map(|_| BytesMut::with_capacity(512))
+                    .collect::<Vec<_>>();
+
+                while keep_going.load(Ordering::Relaxed) {
+                    let events = buf.read_events(&mut buffers).await.unwrap();
+                    for buf in buffers.iter_mut().take(events.read) {
+                        let report = unsafe { (buf.as_ptr() as *const FunctionInvocationReport) .read_unaligned() };
+
+                        let (executable, mut stacktrace) = match report {
+                            FunctionInvocationReport::Strcpy {
+                                executable,
+                                stack_id,
+                            } => {
+                                let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
+                                    error!("Couldn't recover the name of the executable which used strcpy.");
+                                    continue;
+                                };
+                                let Ok(stacktrace) = stacktraces.get(&stack_id, 0) else {
+                                    error!("Couldn't recover the stacktrace of the executable {executable} which used strcpy.");
+                                    continue;
+                                };
+                                (executable.to_string(), stacktrace)
+                            },
+                        };
+
+                        if let Ok(path) = which::which(&executable) {
+                            let reader = symbols.read().await;
+                            if let Some(map) = reader.get(&path) {
+                                stacktrace.resolve(&map);
+                            } else {
+                                drop(reader);
+                                let mut writer = symbols.write().await;
+
+                                let map = if let Ok(bin_data) = std::fs::read(&path) {
+                                    if let Ok(obj_file) = object::File::parse(&*bin_data) {
+                                        obj_file.symbols().filter_map(|sym| sym.name().map(|name| (sym.address(), name.to_string())).ok()).collect()
+                                    } else {
+                                        warn!("Couldn't read object for {executable}");
+                                        BTreeMap::new()
+                                    }
+                                } else {
+                                    warn!("Couldn't read file for {executable}");
+                                    BTreeMap::new()
+                                };
+
+                                stacktrace.resolve(&map);
+                                writer.insert(path, map);
+                            }
+                        }
+
+                        let stacktrace = stacktrace.frames().into_iter().enumerate().map(|(i, entry)| {
+                            if let Some(sym) = &entry.symbol_name {
+                                format!("{i}: {sym}")
+                            } else {
+                                format!("{i}: 0x{:x}", entry.ip)
+                            }
+                        }).collect::<Vec<_>>().join("\n");
+
+                        match report {
+                            FunctionInvocationReport::Strcpy { .. } => {
+                                warn!("{executable} invoked strcpy; stacktrace: \n{stacktrace}");
+                            }
+                        }
+                    }
+                }
+            }));
+        }
+    }
+
     let btf = Btf::from_sys_fs()?;
     let program: &mut FEntry = bpf.program_mut("security_file_open").unwrap().try_into()?;
     program.load("security_file_open", &btf)?;
     program.attach()?;
 
-    let mut reports = AsyncPerfEventArray::try_from(bpf.take_map("REPORT_QUEUE").unwrap())?;
-
-    let keep_going = Arc::new(AtomicBool::new(true));
-    let mut tasks = Vec::new();
-    for cpu_id in online_cpus()? {
-        let mut buf = reports.open(cpu_id, None)?;
-        let keep_going = keep_going.clone();
-
-        tasks.push(task::spawn(async move {
-            let mut buffers = (0..32)
-                .map(|_| BytesMut::with_capacity(512))
-                .collect::<Vec<_>>();
-
-            while keep_going.load(Ordering::Relaxed) {
-                let events = buf.read_events(&mut buffers).await.unwrap();
-                for buf in buffers.iter_mut().take(events.read) {
-                    let ptr = buf.as_ptr() as *const Report;
-                    let report = unsafe { ptr.read_unaligned() };
-
-                    let Ok(filename) = (unsafe {
-                        CStr::from_ptr(report.filename.as_ptr() as *const c_char).to_str()
-                    }) else {
-                        continue;
-                    };
-                    let i_mode = report.i_mode;
-                    let pid = report.pid_tgid as u32;
-
-                    let mut rendered = [0; 9];
-                    for (i, e) in rendered.iter_mut().enumerate() {
-                        let b = if i_mode & (0b1 << (9 - i - 1)) != 0 {
-                            match i % 3 {
-                                0 => b'r',
-                                1 => b'w',
-                                2 => b'x',
-                                _ => unreachable!(),
-                            }
-                        } else {
-                            b'-'
-                        };
-                        *e = b;
-                    }
-                    let rendered = core::str::from_utf8(&rendered).unwrap();
-
-                    let filetype = i_mode >> 12;
-                    let filetype = match filetype {
-                        0x1 => "fifo",
-                        0x2 => "chardev",
-                        0x4 => "directory",
-                        0x6 => "blockdev",
-                        0x8 => "file",
-                        0xA => "symlink",
-                        0xC => "socket",
-                        _ => unreachable!(),
-                    };
-
-                    if i_mode & 0xF000 == 0x8000 || i_mode & 0xF000 == 0x4000 {
-                        error!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}");
-                    } else {
-                        warn!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}")
-                    }
-                }
-            }
-        }));
-    }
+    let program: &mut UProbe = bpf.program_mut("strcpy").unwrap().try_into()?;
+    program.load()?;
+    program.attach(Some("strcpy"), 0, "libc", None)?;
 
     info!("Waiting for Ctrl-C...");
     signal::ctrl_c().await?;
