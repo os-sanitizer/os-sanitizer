@@ -215,11 +215,11 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     let btf = Btf::from_sys_fs()?;
-    let program: &mut FEntry = bpf.program_mut("security_file_open").unwrap().try_into()?;
+    let program: &mut FEntry = bpf.program_mut("fentry_security_file_open").unwrap().try_into()?;
     program.load("security_file_open", &btf)?;
     program.attach()?;
 
-    let program: &mut UProbe = bpf.program_mut("strcpy").unwrap().try_into()?;
+    let program: &mut UProbe = bpf.program_mut("uprobe_strcpy").unwrap().try_into()?;
     program.load()?;
     program.attach(Some("strcpy"), 0, "libc", None)?;
 
