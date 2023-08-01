@@ -104,7 +104,7 @@ fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 
     e.into()
 }
 
-#[fentry(name = "security_file_open")]
+#[fentry(function = "security_file_open")]
 fn fentry_security_file_open(probe: FEntryContext) -> u32 {
     match unsafe { try_fentry_security_file_open(&probe) } {
         Ok(res) => res,
@@ -142,7 +142,7 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
     Ok(0)
 }
 
-#[uprobe(name = "strcpy")]
+#[uprobe(function = "strcpy")]
 fn uprobe_strcpy(probe: ProbeContext) -> u32 {
     match unsafe { try_uprobe_strcpy(&probe) } {
         Ok(res) => res,
