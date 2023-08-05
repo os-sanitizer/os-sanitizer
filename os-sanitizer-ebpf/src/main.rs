@@ -8,19 +8,21 @@ pub static LICENSE: [u8; 4] = *b"GPL\0";
 #[allow(nonstandard_style, unused)]
 mod binding;
 
-use crate::binding::file;
+use crate::binding::{file, pid};
+use aya_bpf::bindings::bpf_map_type::BPF_MAP_TYPE_LRU_HASH;
 use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
-use aya_bpf::cty::{c_char, c_void, uintptr_t};
+use aya_bpf::cty::{c_char, c_void, size_t, uintptr_t};
 use aya_bpf::helpers::gen::bpf_get_current_comm;
-use aya_bpf::helpers::{bpf_d_path, bpf_get_current_pid_tgid};
+use aya_bpf::helpers::{bpf_d_path, bpf_get_current_pid_tgid, bpf_probe_read};
 use aya_bpf::macros::map;
 use aya_bpf::macros::{fentry, uprobe};
-use aya_bpf::maps::{PerfEventArray, StackTrace};
+use aya_bpf::maps::{Array, HashMap, LruHashMap, PerfEventArray, StackTrace};
 use aya_bpf::programs::{FEntryContext, ProbeContext};
 use aya_bpf::BpfContext;
-use aya_log_ebpf::error;
+use aya_bpf_macros::uretprobe;
+use aya_log_ebpf::{error, info};
 use core::hint::unreachable_unchecked;
-use core::mem::offset_of;
+use core::mem::{offset_of, size_of};
 use os_sanitizer_common::OsSanitizerError::*;
 use os_sanitizer_common::{FileAccessReport, FunctionInvocationReport, OsSanitizerError};
 
@@ -142,37 +144,102 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
     Ok(0)
 }
 
+#[map]
+static STRLEN_PTR_MAP: HashMap<u64, uintptr_t> = HashMap::with_max_entries(1 << 16, 0);
+
+#[map]
+static STRLEN_MAP: LruHashMap<(uintptr_t, size_t), u8> = LruHashMap::with_max_entries(1 << 16, 0);
+
 #[uprobe]
-fn uprobe_strcpy(probe: ProbeContext) -> u32 {
-    match unsafe { try_uprobe_strcpy(&probe) } {
+fn uprobe_strlen(probe: ProbeContext) -> u32 {
+    match unsafe { try_uprobe_strlen(&probe) } {
         Ok(res) => res,
-        Err(e) => emit_error(&probe, e, "os_sanitizer_strcpy_uprobe"),
+        Err(e) => emit_error(&probe, e, "os_sanitizer_strlen_uprobe"),
     }
 }
 
 #[inline(always)]
-unsafe fn try_uprobe_strcpy(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
-    let stack_id = STACK_MAP
-        .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-        .map_err(|e| CouldntRecoverStack("strcpy", e))? as u32;
+unsafe fn try_uprobe_strlen(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
+    let strptr: uintptr_t = probe.arg(0).expect("strlen has at least one argument");
 
-    let mut executable = [0u8; 128];
+    if strptr != 0 {
+        let pidtgid = bpf_get_current_pid_tgid();
 
-    // we do this manually because the existing implementation is restricted to 16 bytes
-    let res = bpf_get_current_comm(
-        executable.as_mut_ptr() as *mut c_void,
-        executable.len() as u32,
-    );
-    if res < 0 {
-        return Err(CouldntGetComm("strcpy comm", res));
+        STRLEN_PTR_MAP
+            .insert(&pidtgid, &strptr, 0)
+            .map_err(|_| OutOfSpace("strlen map"))?;
     }
 
-    let report = FunctionInvocationReport::Strcpy {
-        executable,
-        stack_id,
-    };
+    Ok(0)
+}
 
-    FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
+#[uretprobe]
+fn uretprobe_strlen(probe: ProbeContext) -> u32 {
+    match unsafe { try_uretprobe_strlen(&probe) } {
+        Ok(res) => res,
+        Err(e) => emit_error(&probe, e, "os_sanitizer_strlen_uretprobe"),
+    }
+}
+
+#[inline(always)]
+unsafe fn try_uretprobe_strlen(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
+    let len: size_t = probe.ret().expect("strlen has a return value");
+
+    let pidtgid = bpf_get_current_pid_tgid();
+
+    let Some(&strptr) = STRLEN_PTR_MAP.get(&pidtgid) else {
+        return Ok(0);
+    };
+    STRLEN_PTR_MAP
+        .remove(&pidtgid)
+        .expect("the value existed, so we must be able to remove it");
+
+    STRLEN_MAP
+        .insert(&(strptr, len), &0, 0)
+        .expect("we should always be able to insert");
+
+    Ok(0)
+}
+
+#[uprobe]
+fn uprobe_strncpy(probe: ProbeContext) -> u32 {
+    match unsafe { try_uprobe_strncpy(&probe) } {
+        Ok(res) => res,
+        Err(e) => emit_error(&probe, e, "os_sanitizer_strncpy_uprobe"),
+    }
+}
+
+#[inline(always)]
+unsafe fn try_uprobe_strncpy(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
+    let strptr: uintptr_t = probe.arg(1).expect("strncpy has a src pointer");
+    let len: size_t = probe.arg(2).expect("strncpy has a copied size");
+
+    if STRLEN_MAP.get(&(strptr, len)).is_some() {
+        let stack_id = STACK_MAP
+            .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
+            .map_err(|e| CouldntRecoverStack("strncpy", e))? as u32;
+
+        let pid_tgid = bpf_get_current_pid_tgid();
+
+        let mut executable = [0u8; 128];
+
+        // we do this manually because the existing implementation is restricted to 16 bytes
+        let res = bpf_get_current_comm(
+            executable.as_mut_ptr() as *mut c_void,
+            executable.len() as u32,
+        );
+        if res < 0 {
+            return Err(CouldntGetComm("strncpy comm", res));
+        }
+
+        let report = FunctionInvocationReport::Strncpy {
+            executable,
+            pid_tgid,
+            stack_id,
+        };
+
+        FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
+    }
 
     Ok(0)
 }

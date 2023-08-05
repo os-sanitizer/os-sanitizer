@@ -19,8 +19,9 @@ pub enum OsSanitizerError {
 
 #[derive(Copy, Clone)]
 pub enum FunctionInvocationReport {
-    Strcpy {
+    Strncpy {
         executable: [u8; 128],
+        pid_tgid: u64,
         stack_id: u32,
     },
 }

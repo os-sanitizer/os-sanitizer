@@ -141,9 +141,10 @@ async fn main() -> Result<(), anyhow::Error> {
                     for buf in buffers.iter_mut().take(events.read) {
                         let report = unsafe { (buf.as_ptr() as *const FunctionInvocationReport).read_unaligned() };
 
-                        let (executable, mut stacktrace) = match report {
-                            FunctionInvocationReport::Strcpy {
+                        let (executable, pid, mut stacktrace) = match report {
+                            FunctionInvocationReport::Strncpy {
                                 executable,
+                                pid_tgid,
                                 stack_id,
                             } => {
                                 let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
@@ -154,7 +155,7 @@ async fn main() -> Result<(), anyhow::Error> {
                                     error!("Couldn't recover the stacktrace of the executable {executable} which used strcpy.");
                                     continue;
                                 };
-                                (executable.to_string(), stacktrace)
+                                (executable.to_string(), (pid_tgid >> 32) as u32, stacktrace)
                             },
                         };
 
@@ -204,8 +205,8 @@ async fn main() -> Result<(), anyhow::Error> {
                         }).collect::<Vec<_>>().join("\n");
 
                         match report {
-                            FunctionInvocationReport::Strcpy { .. } => {
-                                warn!("{executable} invoked strcpy; stacktrace: \n{stacktrace}");
+                            FunctionInvocationReport::Strncpy { .. } => {
+                                warn!("{executable} (pid: {pid}) invoked strncpy with src pointer determining copied length; stacktrace: \n{stacktrace}", );
                             }
                         }
                     }
@@ -215,13 +216,24 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     let btf = Btf::from_sys_fs()?;
-    let program: &mut FEntry = bpf.program_mut("fentry_security_file_open").unwrap().try_into()?;
+    let program: &mut FEntry = bpf
+        .program_mut("fentry_security_file_open")
+        .unwrap()
+        .try_into()?;
     program.load("security_file_open", &btf)?;
     program.attach()?;
 
-    let program: &mut UProbe = bpf.program_mut("uprobe_strcpy").unwrap().try_into()?;
+    let program: &mut UProbe = bpf.program_mut("uprobe_strncpy").unwrap().try_into()?;
     program.load()?;
-    program.attach(Some("strcpy"), 0, "libc", None)?;
+    program.attach(Some("strncpy"), 0, "libc", None)?;
+
+    let program: &mut UProbe = bpf.program_mut("uprobe_strlen").unwrap().try_into()?;
+    program.load()?;
+    program.attach(Some("strlen"), 0, "libc", None)?;
+
+    let program: &mut UProbe = bpf.program_mut("uretprobe_strlen").unwrap().try_into()?;
+    program.load()?;
+    program.attach(Some("strlen"), 0, "libc", None)?;
 
     info!("Waiting for Ctrl-C...");
     signal::ctrl_c().await?;
