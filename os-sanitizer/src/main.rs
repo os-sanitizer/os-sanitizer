@@ -151,7 +151,7 @@ async fn main() -> Result<(), anyhow::Error> {
                                     error!("Couldn't recover the name of the executable which used strcpy.");
                                     continue;
                                 };
-                                let Ok(stacktrace) = stacktraces.get(&stack_id, 0) else {
+                                let Ok(stacktrace) = stacktraces.get(&(stack_id as u32), 0) else {
                                     error!("Couldn't recover the stacktrace of the executable {executable} which used strcpy.");
                                     continue;
                                 };
@@ -225,15 +225,15 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let program: &mut UProbe = bpf.program_mut("uprobe_strncpy").unwrap().try_into()?;
     program.load()?;
-    program.attach(Some("strncpy"), 0, "libc", None)?;
+    program.attach(Some("__strncpy_avx2"), 0, "libc", None)?;
 
     let program: &mut UProbe = bpf.program_mut("uprobe_strlen").unwrap().try_into()?;
     program.load()?;
-    program.attach(Some("strlen"), 0, "libc", None)?;
+    program.attach(Some("__strlen_avx2"), 0, "libc", None)?;
 
     let program: &mut UProbe = bpf.program_mut("uretprobe_strlen").unwrap().try_into()?;
     program.load()?;
-    program.attach(Some("strlen"), 0, "libc", None)?;
+    program.attach(Some("__strlen_avx2"), 0, "libc", None)?;
 
     info!("Waiting for Ctrl-C...");
     signal::ctrl_c().await?;

@@ -14,15 +14,16 @@ pub enum OsSanitizerError {
     OutOfSpace(&'static str),
     RacefulAccess(&'static str),
     ImpossibleFile,
-    Unreachable,
+    Unreachable(&'static str),
 }
 
 #[derive(Copy, Clone)]
+#[repr(u64, align(8))]
 pub enum FunctionInvocationReport {
     Strncpy {
         executable: [u8; 128],
         pid_tgid: u64,
-        stack_id: u32,
+        stack_id: u64,
     },
 }
 

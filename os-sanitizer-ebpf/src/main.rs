@@ -96,10 +96,10 @@ fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 
                 "Encountered an impossible file while handling {}", name
             );
         }
-        Unreachable => {
+        Unreachable(condition) => {
             error!(
                 probe,
-                "Encountered an unreachable code block while handling {}", name
+                "Encountered an unreachable code block while handling {}: {}", name, condition
             );
         }
     }
@@ -160,13 +160,15 @@ fn uprobe_strlen(probe: ProbeContext) -> u32 {
 
 #[inline(always)]
 unsafe fn try_uprobe_strlen(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
-    let strptr: uintptr_t = probe.arg(0).expect("strlen has at least one argument");
+    let strptr: uintptr_t = probe
+        .arg(0)
+        .ok_or(Unreachable("strlen didn't have an argument"))?;
 
     if strptr != 0 {
-        let pidtgid = bpf_get_current_pid_tgid();
+        let pid_tgid = bpf_get_current_pid_tgid();
 
         STRLEN_PTR_MAP
-            .insert(&pidtgid, &strptr, 0)
+            .insert(&pid_tgid, &strptr, 0)
             .map_err(|_| OutOfSpace("strlen map"))?;
     }
 
@@ -183,20 +185,22 @@ fn uretprobe_strlen(probe: ProbeContext) -> u32 {
 
 #[inline(always)]
 unsafe fn try_uretprobe_strlen(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
-    let len: size_t = probe.ret().expect("strlen has a return value");
+    let srclen: size_t = probe
+        .ret()
+        .ok_or(Unreachable("strlen has a return value"))?;
 
-    let pidtgid = bpf_get_current_pid_tgid();
+    let pid_tgid = bpf_get_current_pid_tgid();
 
-    let Some(&strptr) = STRLEN_PTR_MAP.get(&pidtgid) else {
+    let Some(&strptr) = STRLEN_PTR_MAP.get(&pid_tgid) else {
         return Ok(0);
     };
     STRLEN_PTR_MAP
-        .remove(&pidtgid)
-        .expect("the value existed, so we must be able to remove it");
+        .remove(&pid_tgid)
+        .map_err(|_| Unreachable("the value existed, so we must be able to remove it"))?;
 
     STRLEN_MAP
-        .insert(&(strptr, len), &0, 0)
-        .expect("we should always be able to insert");
+        .insert(&(strptr, srclen), &0, 0)
+        .map_err(|_| Unreachable("we should always be able to insert"))?;
 
     Ok(0)
 }
@@ -211,15 +215,19 @@ fn uprobe_strncpy(probe: ProbeContext) -> u32 {
 
 #[inline(always)]
 unsafe fn try_uprobe_strncpy(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
-    let strptr: uintptr_t = probe.arg(1).expect("strncpy has a src pointer");
-    let len: size_t = probe.arg(2).expect("strncpy has a copied size");
+    let strptr: uintptr_t = probe
+        .arg(1)
+        .ok_or(Unreachable("strncpy has a src pointer"))?;
+    let maybe_src_len: size_t = probe
+        .arg(2)
+        .ok_or(Unreachable("strncpy has a copied size"))?;
 
-    if STRLEN_MAP.get(&(strptr, len)).is_some() {
+    let pid_tgid = bpf_get_current_pid_tgid();
+
+    if STRLEN_MAP.get(&(strptr, maybe_src_len)).is_some() {
         let stack_id = STACK_MAP
             .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-            .map_err(|e| CouldntRecoverStack("strncpy", e))? as u32;
-
-        let pid_tgid = bpf_get_current_pid_tgid();
+            .map_err(|e| CouldntRecoverStack("strncpy", e))? as u64;
 
         let mut executable = [0u8; 128];
 
