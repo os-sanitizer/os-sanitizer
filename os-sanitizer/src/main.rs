@@ -6,7 +6,7 @@ use aya_log::BpfLogger;
 use bytes::BytesMut;
 use log::{debug, error, info, warn};
 use object::{Object, ObjectSection, ObjectSymbol, SymbolKind};
-use os_sanitizer_common::{FileAccessReport, FunctionInvocationReport};
+use os_sanitizer_common::{FileAccessReport, FunctionInvocationReport, StrncpyViolation};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{c_char, CStr};
 use std::ops::Range;
@@ -146,6 +146,7 @@ async fn main() -> Result<(), anyhow::Error> {
                                 executable,
                                 pid_tgid,
                                 stack_id,
+                                ..
                             } => {
                                 let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
                                     error!("Couldn't recover the name of the executable which used strcpy.");
@@ -205,8 +206,11 @@ async fn main() -> Result<(), anyhow::Error> {
                         }).collect::<Vec<_>>().join("\n");
 
                         match report {
-                            FunctionInvocationReport::Strncpy { .. } => {
+                            FunctionInvocationReport::Strncpy { variant: StrncpyViolation::Strlen, .. } => {
                                 warn!("{executable} (pid: {pid}) invoked strncpy with src pointer determining copied length; stacktrace: \n{stacktrace}", );
+                            }
+                            FunctionInvocationReport::Strncpy { variant: StrncpyViolation::Malloc, .. } => {
+                                warn!("{executable} (pid: {pid}) invoked strncpy with src pointer allocated with less length than specified available; stacktrace: \n{stacktrace}", );
                             }
                         }
                     }
@@ -226,6 +230,14 @@ async fn main() -> Result<(), anyhow::Error> {
     let program: &mut UProbe = bpf.program_mut("uprobe_strncpy").unwrap().try_into()?;
     program.load()?;
     program.attach(Some("__strncpy_avx2"), 0, "libc", None)?;
+
+    let program: &mut UProbe = bpf.program_mut("uprobe_malloc").unwrap().try_into()?;
+    program.load()?;
+    program.attach(Some("malloc"), 0, "libc", None)?;
+
+    let program: &mut UProbe = bpf.program_mut("uretprobe_malloc").unwrap().try_into()?;
+    program.load()?;
+    program.attach(Some("malloc"), 0, "libc", None)?;
 
     let program: &mut UProbe = bpf.program_mut("uprobe_strlen").unwrap().try_into()?;
     program.load()?;

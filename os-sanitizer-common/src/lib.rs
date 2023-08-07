@@ -19,11 +19,19 @@ pub enum OsSanitizerError {
 
 #[derive(Copy, Clone)]
 #[repr(u64, align(8))]
+pub enum StrncpyViolation {
+    Strlen,
+    Malloc,
+}
+
+#[derive(Copy, Clone)]
+#[repr(u64, align(8))]
 pub enum FunctionInvocationReport {
     Strncpy {
         executable: [u8; 128],
         pid_tgid: u64,
         stack_id: u64,
+        variant: StrncpyViolation,
     },
 }
 

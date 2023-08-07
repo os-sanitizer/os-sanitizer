@@ -24,6 +24,7 @@ use aya_log_ebpf::{error, info};
 use core::hint::unreachable_unchecked;
 use core::mem::{offset_of, size_of};
 use os_sanitizer_common::OsSanitizerError::*;
+use os_sanitizer_common::StrncpyViolation::{Malloc, Strlen};
 use os_sanitizer_common::{FileAccessReport, FunctionInvocationReport, OsSanitizerError};
 
 #[map(name = "FILE_REPORT_QUEUE")]
@@ -205,6 +206,65 @@ unsafe fn try_uretprobe_strlen(probe: &ProbeContext) -> Result<u32, OsSanitizerE
     Ok(0)
 }
 
+#[map]
+static MALLOC_LEN_MAP: HashMap<u64, uintptr_t> = HashMap::with_max_entries(1 << 16, 0);
+
+#[map]
+static MALLOC_MAP: LruHashMap<uintptr_t, size_t> = LruHashMap::with_max_entries(1 << 16, 0);
+
+#[uprobe]
+fn uprobe_malloc(probe: ProbeContext) -> u32 {
+    match unsafe { try_uprobe_malloc(&probe) } {
+        Ok(res) => res,
+        Err(e) => emit_error(&probe, e, "os_sanitizer_malloc_uprobe"),
+    }
+}
+
+#[inline(always)]
+unsafe fn try_uprobe_malloc(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
+    let malloc_len: size_t = probe
+        .arg(0)
+        .ok_or(Unreachable("malloc didn't have an argument"))?;
+
+    let pid_tgid = bpf_get_current_pid_tgid();
+
+    MALLOC_LEN_MAP
+        .insert(&pid_tgid, &malloc_len, 0)
+        .map_err(|_| OutOfSpace("malloc map"))?;
+
+    Ok(0)
+}
+
+#[uretprobe]
+fn uretprobe_malloc(probe: ProbeContext) -> u32 {
+    match unsafe { try_uretprobe_malloc(&probe) } {
+        Ok(res) => res,
+        Err(e) => emit_error(&probe, e, "os_sanitizer_malloc_uretprobe"),
+    }
+}
+
+#[inline(always)]
+unsafe fn try_uretprobe_malloc(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
+    let malloc_ptr: uintptr_t = probe
+        .ret()
+        .ok_or(Unreachable("malloc has a return value"))?;
+
+    let pid_tgid = bpf_get_current_pid_tgid();
+
+    let Some(&malloc_len) = MALLOC_LEN_MAP.get(&pid_tgid) else {
+        return Ok(0);
+    };
+    MALLOC_LEN_MAP
+        .remove(&pid_tgid)
+        .map_err(|_| Unreachable("the value existed, so we must be able to remove it"))?;
+
+    MALLOC_MAP
+        .insert(&malloc_ptr, &malloc_len, 0)
+        .map_err(|_| Unreachable("we should always be able to insert"))?;
+
+    Ok(0)
+}
+
 #[uprobe]
 fn uprobe_strncpy(probe: ProbeContext) -> u32 {
     match unsafe { try_uprobe_strncpy(&probe) } {
@@ -215,6 +275,9 @@ fn uprobe_strncpy(probe: ProbeContext) -> u32 {
 
 #[inline(always)]
 unsafe fn try_uprobe_strncpy(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
+    let destptr: uintptr_t = probe
+        .arg(0)
+        .ok_or(Unreachable("strncpy has a dest pointer"))?;
     let strptr: uintptr_t = probe
         .arg(1)
         .ok_or(Unreachable("strncpy has a src pointer"))?;
@@ -224,7 +287,25 @@ unsafe fn try_uprobe_strncpy(probe: &ProbeContext) -> Result<u32, OsSanitizerErr
 
     let pid_tgid = bpf_get_current_pid_tgid();
 
+    let mut report = None;
+
     if STRLEN_MAP.get(&(strptr, maybe_src_len)).is_some() {
+        // okay, so this is a strlen => strncpy, but did we allocate for it?
+        if let Some(&malloced) = MALLOC_MAP.get(&destptr) {
+            if malloced > maybe_src_len {
+                return Ok(0);
+            }
+        }
+
+        report = Some(Strlen);
+    } else if let Some(&malloced) = MALLOC_MAP.get(&destptr) {
+        // okay, so we allocated it, but is it big enough?
+        if malloced <= maybe_src_len {
+            report = Some(Malloc)
+        }
+    }
+
+    if let Some(variant) = report {
         let stack_id = STACK_MAP
             .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
             .map_err(|e| CouldntRecoverStack("strncpy", e))? as u64;
@@ -244,6 +325,7 @@ unsafe fn try_uprobe_strncpy(probe: &ProbeContext) -> Result<u32, OsSanitizerErr
             executable,
             pid_tgid,
             stack_id,
+            variant,
         };
 
         FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
