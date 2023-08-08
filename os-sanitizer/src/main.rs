@@ -257,7 +257,6 @@ async fn main() -> Result<(), anyhow::Error> {
     let program: &mut UProbe = bpf.program_mut("uprobe_malloc").unwrap().try_into()?;
     program.load()?;
     program.attach(Some("__libc_malloc"), 0, "libc", None)?;
-
     let program: &mut UProbe = bpf.program_mut("uretprobe_malloc").unwrap().try_into()?;
     program.load()?;
     program.attach(Some("__libc_malloc"), 0, "libc", None)?;
@@ -265,15 +264,17 @@ async fn main() -> Result<(), anyhow::Error> {
     let program: &mut UProbe = bpf.program_mut("uprobe_realloc").unwrap().try_into()?;
     program.load()?;
     program.attach(Some("__libc_realloc"), 0, "libc", None)?;
-
     let program: &mut UProbe = bpf.program_mut("uretprobe_realloc").unwrap().try_into()?;
     program.load()?;
     program.attach(Some("__libc_realloc"), 0, "libc", None)?;
 
+    let program: &mut UProbe = bpf.program_mut("uprobe_free").unwrap().try_into()?;
+    program.load()?;
+    program.attach(Some("__libc_free"), 0, "libc", None)?;
+
     let program: &mut UProbe = bpf.program_mut("uprobe_strlen").unwrap().try_into()?;
     program.load()?;
     program.attach(Some("__strlen_avx2"), 0, "libc", None)?;
-
     let program: &mut UProbe = bpf.program_mut("uretprobe_strlen").unwrap().try_into()?;
     program.load()?;
     program.attach(Some("__strlen_avx2"), 0, "libc", None)?;

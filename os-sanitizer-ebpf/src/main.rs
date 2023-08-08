@@ -303,6 +303,11 @@ unsafe fn try_uprobe_realloc(probe: &ProbeContext) -> Result<u32, OsSanitizerErr
     }
 
     // we do not care if the value was not present
+    if let Some(&len) = MALLOC_MAP.get(&(pid_tgid, realloc_ptr)) {
+        if let Some(approx) = approximate_range(realloc_ptr, len) {
+            let _ = MALLOC_APPROX_MAP.remove(&(pid_tgid, approx));
+        }
+    }
     let _ = MALLOC_MAP.remove(&(pid_tgid, realloc_ptr));
 
     let realloc_len: size_t = probe
@@ -312,6 +317,41 @@ unsafe fn try_uprobe_realloc(probe: &ProbeContext) -> Result<u32, OsSanitizerErr
     MALLOC_LEN_MAP
         .insert(&pid_tgid, &realloc_len, 0)
         .map_err(|_| OutOfSpace("realloc map"))?;
+
+    Ok(0)
+}
+
+#[uprobe]
+fn uprobe_free(probe: ProbeContext) -> u32 {
+    match unsafe { try_uprobe_free(&probe) } {
+        Ok(res) => res,
+        Err(e) => emit_error(&probe, e, "os_sanitizer_free_uprobe"),
+    }
+}
+
+#[inline(always)]
+unsafe fn try_uprobe_free(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
+    let pid_tgid = bpf_get_current_pid_tgid();
+
+    if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
+        return Ok(0);
+    }
+
+    let free_ptr: uintptr_t = probe
+        .arg(0)
+        .ok_or(Unreachable("malloc didn't have a pointer argument"))?;
+
+    if free_ptr == 0 {
+        return Ok(0);
+    }
+
+    // we do not care if the value was not present
+    if let Some(&len) = MALLOC_MAP.get(&(pid_tgid, free_ptr)) {
+        if let Some(approx) = approximate_range(free_ptr, len) {
+            let _ = MALLOC_APPROX_MAP.remove(&(pid_tgid, approx));
+        }
+    }
+    let _ = MALLOC_MAP.remove(&(pid_tgid, free_ptr));
 
     Ok(0)
 }
