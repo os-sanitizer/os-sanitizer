@@ -19,54 +19,18 @@ use aya_bpf::maps::{HashMap, LruHashMap, PerfEventArray, StackTrace};
 use aya_bpf::programs::{FEntryContext, ProbeContext};
 use aya_bpf::BpfContext;
 use aya_bpf_macros::uretprobe;
-use aya_log_ebpf::{error, info};
+use aya_log_ebpf::error;
 use core::hint::unreachable_unchecked;
 use core::mem::offset_of;
 use os_sanitizer_common::CopyViolation::{Malloc, Strlen};
 use os_sanitizer_common::OsSanitizerError::*;
 use os_sanitizer_common::{
-    CopyViolation, FileAccessReport, FunctionInvocationReport, OsSanitizerError, EXECUTABLE_LEN,
+    approximate_range, CopyViolation, FileAccessReport, FunctionInvocationReport, OsSanitizerError,
+    EXECUTABLE_LEN,
 };
 
 #[map(name = "IGNORED_PIDS")]
 pub static IGNORED_PIDS: HashMap<u32, u8> = HashMap::with_max_entries(1 << 12, 0);
-
-// #[map]
-// pub static NEST_AVOIDING: HashMap<u64, u64> = HashMap::with_max_entries(1 << 16, 0);
-//
-// unsafe fn enter_nest(pid_tgid: u64) -> Result<Option<u64>, OsSanitizerError> {
-//     if let Some(&existing) = NEST_AVOIDING.get(&pid_tgid) {
-//         let existing = existing + 1;
-//         NEST_AVOIDING
-//             .insert(&pid_tgid, &existing, 0)
-//             .map_err(|_| Unreachable("while replacing existing nesting, we ran out of space?"))?;
-//         Ok(Some(existing))
-//     } else {
-//         NEST_AVOIDING
-//             .insert(&pid_tgid, &1, 0)
-//             .map_err(|_| OutOfSpace("while inserting anti-nesting, we ran out of space"))?;
-//         Ok(None)
-//     }
-// }
-//
-// unsafe fn exit_nest(pid_tgid: u64) -> Result<Option<u64>, OsSanitizerError> {
-//     if let Some(&existing) = NEST_AVOIDING.get(&pid_tgid) {
-//         let existing = existing - 1;
-//         if existing == 0 {
-//             NEST_AVOIDING
-//                 .remove(&pid_tgid)
-//                 .map_err(|_| Unreachable("Must be able to remove existing value"))?;
-//             Ok(None)
-//         } else {
-//             NEST_AVOIDING.insert(&pid_tgid, &existing, 0).map_err(|_| {
-//                 Unreachable("while replacing existing nesting, we ran out of space?")
-//             })?;
-//             Ok(Some(existing))
-//         }
-//     } else {
-//         Ok(None)
-//     }
-// }
 
 #[map(name = "FILE_REPORT_QUEUE")]
 pub static FILE_REPORT_QUEUE: PerfEventArray<FileAccessReport> =
@@ -267,7 +231,7 @@ static MALLOC_LEN_MAP: HashMap<u64, size_t> = HashMap::with_max_entries(1 << 16,
 static MALLOC_MAP: LruHashMap<(u64, uintptr_t), size_t> = LruHashMap::with_max_entries(1 << 16, 0);
 
 #[map]
-static MALLOC_END_MAP: LruHashMap<(u64, uintptr_t), uintptr_t> =
+static MALLOC_APPROX_MAP: LruHashMap<(u64, uintptr_t), uintptr_t> =
     LruHashMap::with_max_entries(1 << 20, 0);
 
 #[map]
@@ -350,20 +314,12 @@ fn insert_allocation(
         .insert(&(pid_tgid, malloc_ptr), &malloc_len, 0)
         .map_err(|_| Unreachable("should always be able to insert new malloc'd pointer"))?;
 
-    let range = malloc_ptr..(malloc_ptr + malloc_len);
-
-    // stash power-of-two less than the end of the allocated region
-    let mut mask = !1;
-    while mask & MAX_ALLOC_DISCOVERABLE != 0 {
-        let val = range.end & mask;
-        if range.contains(&val) {
-            MALLOC_END_MAP
-                .insert(&(pid_tgid, val), &malloc_ptr, 0)
-                .map_err(|_| {
-                    Unreachable("should always be able to insert malloc'd pointer finding")
-                })?;
-        }
-        mask <<= 1;
+    if let Some(approximate) = approximate_range(malloc_ptr, malloc_len) {
+        MALLOC_APPROX_MAP
+            .insert(&(pid_tgid, approximate), &malloc_ptr, 0)
+            .map_err(|_| {
+                Unreachable("should always be able to insert new approximated malloc'd pointer")
+            })?;
     }
 
     Ok(())
@@ -373,6 +329,7 @@ unsafe fn find_allocation(
     pid_tgid: u64,
     sought_ptr: uintptr_t,
 ) -> Result<Option<(uintptr_t, size_t)>, OsSanitizerError> {
+    // fast option: do we know this pointer?
     if let Some(&len) = MALLOC_MAP.get(&(pid_tgid, sought_ptr)) {
         return Ok(Some((sought_ptr, len)));
     }
@@ -385,7 +342,7 @@ unsafe fn find_allocation(
         // if the nth-from-last bit is zero, then there is no difference between nth and n+1nth
         if sought_ptr & distinguisher != 0 {
             let lower = sought_ptr & mask;
-            if let Some(&ptr) = MALLOC_END_MAP.get(&(pid_tgid, lower)) {
+            if let Some(&ptr) = MALLOC_APPROX_MAP.get(&(pid_tgid, lower)) {
                 if let Some(&len) = MALLOC_MAP.get(&(pid_tgid, ptr)) {
                     let range = ptr..(ptr + len);
                     if range.contains(&sought_ptr) {
@@ -395,7 +352,7 @@ unsafe fn find_allocation(
             }
 
             let upper = lower + !mask + 1;
-            if let Some(&ptr) = MALLOC_END_MAP.get(&(pid_tgid, upper)) {
+            if let Some(&ptr) = MALLOC_APPROX_MAP.get(&(pid_tgid, upper)) {
                 if let Some(&len) = MALLOC_MAP.get(&(pid_tgid, ptr)) {
                     let range = ptr..(ptr + len);
                     if range.contains(&sought_ptr) {

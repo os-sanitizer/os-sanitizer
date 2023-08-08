@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "user"), no_std)]
 
 use aya_bpf_cty::uintptr_t;
+use core::mem::size_of_val;
 
 pub const EXECUTABLE_LEN: usize = 128;
 
@@ -67,5 +68,44 @@ unsafe impl aya::Pod for FileAccessReport {}
 impl From<OsSanitizerError> for u32 {
     fn from(value: OsSanitizerError) -> Self {
         unsafe { *<*const _>::from(&value).cast::<u32>() }
+    }
+}
+
+#[inline(always)]
+pub fn approximate_range(base: usize, len: usize) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+
+    // ilog2 causes a bpf linkage error
+    // let zeroable = len.ilog2();
+    let mut zeroable = 0;
+    while (1 << zeroable) <= len {
+        zeroable += 1;
+        if zeroable > size_of_val(&len) * 8 {
+            return None;
+        }
+    }
+
+    let mask = !(usize::MAX % (1 << (zeroable - 1)));
+
+    let approximate = (base + len - 1) & mask;
+    Some(approximate)
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn approximate_range() {
+        for base in 0..128 {
+            for len in 0..128 {
+                if let Some(approx) = super::approximate_range(base, len) {
+                    assert!(
+                        (base..(base + len)).contains(&approx),
+                        "expected {approx} to be in [{base}, {base}+{len})"
+                    );
+                }
+            }
+        }
     }
 }
