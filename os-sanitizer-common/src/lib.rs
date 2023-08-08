@@ -2,6 +2,8 @@
 
 use aya_bpf_cty::uintptr_t;
 
+pub const EXECUTABLE_LEN: usize = 128;
+
 #[repr(u32)]
 pub enum OsSanitizerError {
     MissingArg(&'static str, usize) = 1,
@@ -19,7 +21,7 @@ pub enum OsSanitizerError {
 
 #[derive(Copy, Clone)]
 #[repr(u64, align(8))]
-pub enum StrncpyViolation {
+pub enum CopyViolation {
     Strlen,
     Malloc,
 }
@@ -28,10 +30,24 @@ pub enum StrncpyViolation {
 #[repr(u64, align(8))]
 pub enum FunctionInvocationReport {
     Strncpy {
-        executable: [u8; 128],
+        executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,
         stack_id: u64,
-        variant: StrncpyViolation,
+        len: u64,
+        allocated: u64,
+        dest: uintptr_t,
+        src: uintptr_t,
+        variant: CopyViolation,
+    },
+    Memcpy {
+        executable: [u8; EXECUTABLE_LEN],
+        pid_tgid: u64,
+        stack_id: u64,
+        len: u64,
+        allocated: u64,
+        dest: uintptr_t,
+        src: uintptr_t,
+        variant: CopyViolation,
     },
 }
 

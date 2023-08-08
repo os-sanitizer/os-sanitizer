@@ -1,4 +1,4 @@
-use aya::maps::{AsyncPerfEventArray, StackTraceMap};
+use aya::maps::{AsyncPerfEventArray, HashMap as AyaHashMap, StackTraceMap};
 use aya::programs::{FEntry, UProbe};
 use aya::util::online_cpus;
 use aya::{include_bytes_aligned, Bpf, Btf};
@@ -6,7 +6,7 @@ use aya_log::BpfLogger;
 use bytes::BytesMut;
 use log::{debug, error, info, warn};
 use object::{Object, ObjectSection, ObjectSymbol, SymbolKind};
-use os_sanitizer_common::{FileAccessReport, FunctionInvocationReport, StrncpyViolation};
+use os_sanitizer_common::{CopyViolation, FileAccessReport, FunctionInvocationReport};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{c_char, CStr};
 use std::ops::Range;
@@ -47,6 +47,12 @@ async fn main() -> Result<(), anyhow::Error> {
         // This can happen if you remove all log statements from your eBPF program.
         warn!("failed to initialize eBPF logger: {}", e);
     }
+
+    let mut ignored_pids: AyaHashMap<_, u32, u8> =
+        AyaHashMap::try_from(bpf.take_map("IGNORED_PIDS").unwrap())?;
+
+    let pid = std::process::id();
+    ignored_pids.insert(pid, 0, 0)?;
 
     let mut file_reports =
         AsyncPerfEventArray::try_from(bpf.take_map("FILE_REPORT_QUEUE").unwrap())?;
@@ -141,22 +147,22 @@ async fn main() -> Result<(), anyhow::Error> {
                     for buf in buffers.iter_mut().take(events.read) {
                         let report = unsafe { (buf.as_ptr() as *const FunctionInvocationReport).read_unaligned() };
 
-                        let (executable, pid, mut stacktrace) = match report {
+                        let (executable, pid, tgid, mut stacktrace) = match report {
                             FunctionInvocationReport::Strncpy {
                                 executable,
                                 pid_tgid,
                                 stack_id,
                                 ..
-                            } => {
+                            } | FunctionInvocationReport::Memcpy { executable, pid_tgid, stack_id, .. } => {
                                 let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
-                                    error!("Couldn't recover the name of the executable which used strcpy.");
+                                    error!("Couldn't recover the name of the executable.");
                                     continue;
                                 };
                                 let Ok(stacktrace) = stacktraces.get(&(stack_id as u32), 0) else {
-                                    error!("Couldn't recover the stacktrace of the executable {executable} which used strcpy.");
+                                    error!("Couldn't recover the stacktrace of the executable {executable}.");
                                     continue;
                                 };
-                                (executable.to_string(), (pid_tgid >> 32) as u32, stacktrace)
+                                (executable.to_string(), (pid_tgid >> 32) as u32, pid_tgid as u32, stacktrace)
                             },
                         };
 
@@ -194,7 +200,7 @@ async fn main() -> Result<(), anyhow::Error> {
                             }
                         }
 
-                        let stacktrace = stacktrace.frames().into_iter().rev().enumerate().map(|(i, entry)| {
+                        let stacktrace = stacktrace.frames().into_iter().enumerate().map(|(i, entry)| {
                             match &entry.symbol_name {
                                 Some(sym) if range.contains(&entry.ip) => {
                                     format!("{i}: {sym} (0x{:x})", entry.ip)
@@ -206,11 +212,17 @@ async fn main() -> Result<(), anyhow::Error> {
                         }).collect::<Vec<_>>().join("\n");
 
                         match report {
-                            FunctionInvocationReport::Strncpy { variant: StrncpyViolation::Strlen, .. } => {
-                                warn!("{executable} (pid: {pid}) invoked strncpy with src pointer determining copied length; stacktrace: \n{stacktrace}", );
+                            FunctionInvocationReport::Strncpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
+                                warn!("{executable} (pid: {pid}, thread: {tgid}) invoked strncpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len}); stacktrace: \n{stacktrace}", );
                             }
-                            FunctionInvocationReport::Strncpy { variant: StrncpyViolation::Malloc, .. } => {
-                                warn!("{executable} (pid: {pid}) invoked strncpy with src pointer allocated with less length than specified available; stacktrace: \n{stacktrace}", );
+                            FunctionInvocationReport::Strncpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
+                                warn!("{executable} (pid: {pid}, thread: {tgid}) invoked strncpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len}); stacktrace: \n{stacktrace}", );
+                            }
+                            FunctionInvocationReport::Memcpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
+                                warn!("{executable} (pid: {pid}, thread: {tgid}) invoked memcpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len}); stacktrace: \n{stacktrace}", );
+                            }
+                            FunctionInvocationReport::Memcpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
+                                warn!("{executable} (pid: {pid}, thread: {tgid}) invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len}); stacktrace: \n{stacktrace}", );
                             }
                         }
                     }
@@ -227,17 +239,21 @@ async fn main() -> Result<(), anyhow::Error> {
     program.load("security_file_open", &btf)?;
     program.attach()?;
 
-    let program: &mut UProbe = bpf.program_mut("uprobe_strncpy").unwrap().try_into()?;
-    program.load()?;
-    program.attach(Some("__strncpy_avx2"), 0, "libc", None)?;
-
     let program: &mut UProbe = bpf.program_mut("uprobe_malloc").unwrap().try_into()?;
     program.load()?;
-    program.attach(Some("malloc"), 0, "libc", None)?;
+    program.attach(Some("__libc_malloc"), 0, "libc", None)?;
 
     let program: &mut UProbe = bpf.program_mut("uretprobe_malloc").unwrap().try_into()?;
     program.load()?;
-    program.attach(Some("malloc"), 0, "libc", None)?;
+    program.attach(Some("__libc_malloc"), 0, "libc", None)?;
+
+    let program: &mut UProbe = bpf.program_mut("uprobe_realloc").unwrap().try_into()?;
+    program.load()?;
+    program.attach(Some("__libc_realloc"), 0, "libc", None)?;
+
+    let program: &mut UProbe = bpf.program_mut("uretprobe_realloc").unwrap().try_into()?;
+    program.load()?;
+    program.attach(Some("__libc_realloc"), 0, "libc", None)?;
 
     let program: &mut UProbe = bpf.program_mut("uprobe_strlen").unwrap().try_into()?;
     program.load()?;
@@ -247,9 +263,20 @@ async fn main() -> Result<(), anyhow::Error> {
     program.load()?;
     program.attach(Some("__strlen_avx2"), 0, "libc", None)?;
 
+    let program: &mut UProbe = bpf.program_mut("uprobe_strncpy").unwrap().try_into()?;
+    program.load()?;
+    program.attach(Some("__strncpy_avx2"), 0, "libc", None)?;
+
+    // memcpy is very noisy! It seems there is some flaw in this logic
+    // let program: &mut UProbe = bpf.program_mut("uprobe_memcpy").unwrap().try_into()?;
+    // program.load()?;
+    // program.attach(Some("__memcpy_avx_unaligned_erms"), 0, "libc", None)?;
+
     info!("Waiting for Ctrl-C...");
     signal::ctrl_c().await?;
     info!("Exiting...");
+
+    program.unload()?;
 
     Ok(())
 }
