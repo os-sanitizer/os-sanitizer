@@ -38,10 +38,10 @@ pub static FILE_REPORT_QUEUE: PerfEventArray<FileAccessReport> =
 
 #[map(name = "FUNCTION_REPORT_QUEUE")]
 pub static FUNCTION_REPORT_QUEUE: PerfEventArray<FunctionInvocationReport> =
-    PerfEventArray::with_max_entries(1 << 12, 0);
+    PerfEventArray::with_max_entries(1 << 16, 0);
 
 #[map(name = "STACKTRACES")]
-pub static STACK_MAP: StackTrace = StackTrace::with_max_entries(1 << 12, 0);
+pub static STACK_MAP: StackTrace = StackTrace::with_max_entries(1 << 16, 0);
 
 #[inline(always)]
 fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 {
@@ -241,7 +241,7 @@ unsafe fn try_uretprobe_strlen(probe: &ProbeContext) -> Result<u32, OsSanitizerE
 static MALLOC_LEN_MAP: HashMap<u64, size_t> = HashMap::with_max_entries(1 << 16, 0);
 
 #[map]
-static MALLOC_MAP: LruHashMap<(u64, uintptr_t), size_t> = LruHashMap::with_max_entries(1 << 16, 0);
+static MALLOC_MAP: LruHashMap<(u64, uintptr_t), size_t> = LruHashMap::with_max_entries(1 << 20, 0);
 
 #[map]
 static MALLOC_APPROX_MAP: LruHashMap<(u64, uintptr_t), (uintptr_t, size_t)> =
