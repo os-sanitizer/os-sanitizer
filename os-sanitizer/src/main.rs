@@ -7,13 +7,13 @@ use bytes::BytesMut;
 use log::{debug, error, info, warn};
 use object::{Object, ObjectSection, ObjectSymbol, SymbolKind};
 use os_sanitizer_common::{CopyViolation, FileAccessReport, FunctionInvocationReport};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::{c_char, CStr};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio::{signal, task};
 
 #[tokio::main]
@@ -67,6 +67,8 @@ async fn main() -> Result<(), anyhow::Error> {
         PathBuf,
         (Range<u64>, BTreeMap<u64, String>),
     >::new()));
+
+    let observed_stacktraces = Arc::new(Mutex::new(HashSet::<(String, u64)>::new()));
 
     let keep_going = Arc::new(AtomicBool::new(true));
     let mut tasks = Vec::new();
@@ -134,6 +136,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
         let mut buf = function_reports.open(cpu_id, None)?;
         {
+            let observed_stacktraces = observed_stacktraces.clone();
             let stacktraces = stacktraces.clone();
             let symbols = symbols.clone();
             let keep_going = keep_going.clone();
@@ -165,6 +168,13 @@ async fn main() -> Result<(), anyhow::Error> {
                                 (executable.to_string(), (pid_tgid >> 32) as u32, pid_tgid as u32, stacktrace)
                             },
                         };
+
+                        let mut observed_lock =
+                            observed_stacktraces.lock().await;
+                        if !observed_lock.insert((executable.clone(), stacktrace.frames()[0].ip)) {
+                            continue;
+                        }
+                        drop(observed_lock);
 
                         let mut range = 0..0;
                         if let Ok(path) = which::which(&executable) {
