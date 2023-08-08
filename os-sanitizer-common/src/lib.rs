@@ -59,7 +59,8 @@ unsafe impl aya::Pod for FunctionInvocationReport {}
 pub struct FileAccessReport {
     pub pid_tgid: u64,
     pub i_mode: u16,
-    pub filename: [u8; 256],
+    pub executable: [u8; EXECUTABLE_LEN],
+    pub filename: [u8; EXECUTABLE_LEN * 2],
 }
 
 #[cfg(feature = "user")]

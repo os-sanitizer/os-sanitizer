@@ -93,6 +93,11 @@ async fn main() -> Result<(), anyhow::Error> {
                         }) else {
                             continue;
                         };
+                        let Ok(executable) = (unsafe {
+                            CStr::from_ptr(report.executable.as_ptr() as *const c_char).to_str()
+                        }) else {
+                            continue;
+                        };
                         let i_mode = report.i_mode;
                         let pid = report.pid_tgid as u32;
 
@@ -125,9 +130,9 @@ async fn main() -> Result<(), anyhow::Error> {
                         };
 
                         if i_mode & 0xF000 == 0x8000 || i_mode & 0xF000 == 0x4000 {
-                            error!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}");
+                            error!("{executable} (pid {pid}) requested `{filename}' (a {filetype}) with permissions {rendered}");
                         } else {
-                            warn!("pid {pid} requested `{filename}' (a {filetype}) with permissions {rendered}")
+                            warn!("{executable} (pid {pid}) requested `{filename}' (a {filetype}) with permissions {rendered}")
                         }
                     }
                 }

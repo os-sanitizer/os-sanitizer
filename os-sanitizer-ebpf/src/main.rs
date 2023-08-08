@@ -137,7 +137,8 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
         let mut report = FileAccessReport {
             pid_tgid,
             i_mode,
-            filename: [0; 256],
+            executable: [0; EXECUTABLE_LEN],
+            filename: [0; EXECUTABLE_LEN * 2],
         };
 
         let len = report.filename.len() as u32;
@@ -146,7 +147,19 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
 
         bpf_d_path(path as *mut aya_bpf::bindings::path, filename_ptr, len);
 
-        if !report.filename.starts_with(b"/proc") && !report.filename.starts_with(b"/sys") {
+        // we do this manually because the existing implementation is restricted to 16 bytes
+        let res = bpf_get_current_comm(
+            report.executable.as_mut_ptr() as *mut c_void,
+            report.executable.len() as u32,
+        );
+        if res < 0 {
+            return Err(CouldntGetComm("security_file_open comm", res));
+        }
+
+        if !report.filename.starts_with(b"/proc")
+            && !report.filename.starts_with(b"/sys")
+            && !report.filename.starts_with(b"/dev")
+        {
             FILE_REPORT_QUEUE.output(ctx, &report, 0);
         }
     }
@@ -231,7 +244,7 @@ static MALLOC_LEN_MAP: HashMap<u64, size_t> = HashMap::with_max_entries(1 << 16,
 static MALLOC_MAP: LruHashMap<(u64, uintptr_t), size_t> = LruHashMap::with_max_entries(1 << 16, 0);
 
 #[map]
-static MALLOC_APPROX_MAP: LruHashMap<(u64, uintptr_t), uintptr_t> =
+static MALLOC_APPROX_MAP: LruHashMap<(u64, uintptr_t), (uintptr_t, size_t)> =
     LruHashMap::with_max_entries(1 << 20, 0);
 
 #[map]
@@ -316,7 +329,7 @@ fn insert_allocation(
 
     if let Some(approximate) = approximate_range(malloc_ptr, malloc_len) {
         MALLOC_APPROX_MAP
-            .insert(&(pid_tgid, approximate), &malloc_ptr, 0)
+            .insert(&(pid_tgid, approximate), &(malloc_ptr, malloc_len), 0)
             .map_err(|_| {
                 Unreachable("should always be able to insert new approximated malloc'd pointer")
             })?;
@@ -342,22 +355,18 @@ unsafe fn find_allocation(
         // if the nth-from-last bit is zero, then there is no difference between nth and n+1nth
         if sought_ptr & distinguisher != 0 {
             let lower = sought_ptr & mask;
-            if let Some(&ptr) = MALLOC_APPROX_MAP.get(&(pid_tgid, lower)) {
-                if let Some(&len) = MALLOC_MAP.get(&(pid_tgid, ptr)) {
-                    let range = ptr..(ptr + len);
-                    if range.contains(&sought_ptr) {
-                        return Ok(Some((ptr, len)));
-                    }
+            if let Some(&(ptr, len)) = MALLOC_APPROX_MAP.get(&(pid_tgid, lower)) {
+                let range = ptr..(ptr + len);
+                if range.contains(&sought_ptr) {
+                    return Ok(Some((ptr, len)));
                 }
             }
 
             let upper = lower + !mask + 1;
-            if let Some(&ptr) = MALLOC_APPROX_MAP.get(&(pid_tgid, upper)) {
-                if let Some(&len) = MALLOC_MAP.get(&(pid_tgid, ptr)) {
-                    let range = ptr..(ptr + len);
-                    if range.contains(&sought_ptr) {
-                        return Ok(Some((ptr, len)));
-                    }
+            if let Some(&(ptr, len)) = MALLOC_APPROX_MAP.get(&(pid_tgid, upper)) {
+                let range = ptr..(ptr + len);
+                if range.contains(&sought_ptr) {
+                    return Ok(Some((ptr, len)));
                 }
             }
         }
