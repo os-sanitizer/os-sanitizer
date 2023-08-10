@@ -6,16 +6,19 @@ publish = false
 
 [dependencies]
 aya = { git = "https://github.com/aya-rs/aya", features = ["async_tokio"] }
+#aya = { path = "../../../../git/aya/aya", features = ["async_tokio"] }
 aya-log = { git = "https://github.com/aya-rs/aya" }
 os-sanitizer-common = { path = "../os-sanitizer-common", features = ["user"] }
+
 anyhow = "1"
 bytes = "1"
 env_logger = "0.10"
 libc = "0.2"
 log = "0.4"
-object = "0.31.1"
-tokio = { version = "1.25", features = ["macros", "rt", "rt-multi-thread", "net", "signal", "sync"] }
+thiserror = "1.0"
+tokio = { version = "1.25", features = ["macros", "rt", "rt-multi-thread", "fs", "net", "signal", "sync"] }
 which = "4.4.0"
+wholesym = { git = "https://github.com/mstange/samply.git" }
 
 [[bin]]
 name = "os-sanitizer"
