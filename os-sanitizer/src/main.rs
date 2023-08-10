@@ -16,6 +16,8 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tokio::{signal, task};
 
+const STACK_DEDUPLICATION_DEPTH: usize = 2;
+
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
@@ -68,7 +70,10 @@ async fn main() -> Result<(), anyhow::Error> {
         (Range<u64>, BTreeMap<u64, String>),
     >::new()));
 
-    let observed_stacktraces = Arc::new(Mutex::new(HashSet::<(String, u64)>::new()));
+    let observed_stacktraces = Arc::new(Mutex::new(HashSet::<(
+        String,
+        [u64; STACK_DEDUPLICATION_DEPTH],
+    )>::new()));
 
     let keep_going = Arc::new(AtomicBool::new(true));
     let mut tasks = Vec::new();
@@ -176,7 +181,14 @@ async fn main() -> Result<(), anyhow::Error> {
 
                         let mut observed_lock =
                             observed_stacktraces.lock().await;
-                        if !observed_lock.insert((executable.clone(), stacktrace.frames()[0].ip)) {
+                        if !observed_lock.insert((
+                            executable.clone(),
+                            stacktrace.frames().iter()
+                                .map(|frame| frame.ip)
+                                .take(STACK_DEDUPLICATION_DEPTH)
+                                .collect::<Vec<_>>()
+                                .try_into().unwrap())
+                        ) {
                             continue;
                         }
                         drop(observed_lock);
@@ -215,7 +227,7 @@ async fn main() -> Result<(), anyhow::Error> {
                             }
                         }
 
-                        let stacktrace = stacktrace.frames().into_iter().enumerate().map(|(i, entry)| {
+                        let stacktrace = stacktrace.frames().iter().enumerate().map(|(i, entry)| {
                             match &entry.symbol_name {
                                 Some(sym) if range.contains(&entry.ip) => {
                                     format!("{i}: {sym} (0x{:x})", entry.ip)
