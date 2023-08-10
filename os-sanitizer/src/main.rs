@@ -119,49 +119,48 @@ async fn main() -> Result<(), anyhow::Error> {
                     warning,
                     stacktrace,
                 } => {
-                    let stacktrace =
-                        if let Ok(resolver) = resolver_factory.resolver_for(pid as pid_t) {
-                            let mut individual_frames = Vec::new();
-                            for (i, frame) in stacktrace.frames().iter().enumerate() {
-                                if let Some((path, frames)) = resolver.resolve_symbol(frame.ip) {
-                                    if let Some(frames) = frames {
-                                        let mut frame_iter = frames.into_iter().enumerate();
-                                        let first = frame_iter
-                                            .next()
-                                            .expect("first frame must always be present")
-                                            .1;
-                                        individual_frames.push(format!(
-                                            "{i}: {}",
-                                            stringify_frame_info(frame, &path, first)
-                                        ));
-                                        for (j, info) in frame_iter {
+                    let stacktrace = if let Ok(resolver) =
+                        resolver_factory.resolver_for(pid as pid_t)
+                    {
+                        let mut individual_frames = Vec::new();
+                        for (i, frame) in stacktrace.frames().iter().enumerate() {
+                            if let Some((path, frames)) = resolver.resolve_symbol(frame.ip) {
+                                if let Some(frames) = frames {
+                                    for (j, info) in frames.into_iter().rev().enumerate().rev() {
+                                        if j == 0 {
                                             individual_frames.push(format!(
-                                                "{i}[{j}]: {}",
+                                                "{i}:\t{}",
+                                                stringify_frame_info(frame, &path, info)
+                                            ));
+                                        } else {
+                                            individual_frames.push(format!(
+                                                "{i}[{j}]:\t{}",
                                                 stringify_frame_info(frame, &path, info)
                                             ));
                                         }
-                                    } else {
-                                        individual_frames.push(format!(
-                                            "{i}: 0x{:x} (from {})",
-                                            frame.ip,
-                                            path.to_string_lossy()
-                                        ));
                                     }
-                                    continue;
                                 } else {
-                                    individual_frames.push(format!("{i}: 0x{:x}", frame.ip));
+                                    individual_frames.push(format!(
+                                        "{i}:\t0x{:x} (from {})",
+                                        frame.ip,
+                                        path.to_string_lossy()
+                                    ));
                                 }
+                                continue;
+                            } else {
+                                individual_frames.push(format!("{i}:\t0x{:x}", frame.ip));
                             }
-                            individual_frames.join("\n")
-                        } else {
-                            stacktrace
-                                .frames()
-                                .iter()
-                                .enumerate()
-                                .map(|(i, frame)| format!("{i}: 0x{:x}", frame.ip))
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        };
+                        }
+                        individual_frames.join("\n")
+                    } else {
+                        stacktrace
+                            .frames()
+                            .iter()
+                            .enumerate()
+                            .map(|(i, frame)| format!("{i}:\t0x{:x}", frame.ip))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    };
 
                     warn!("{warning}; stacktrace:\n{stacktrace}");
                 }

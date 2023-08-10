@@ -263,7 +263,7 @@ impl ProcMapResolverFactory {
         Self {
             handle,
             manager: Rc::new(SymbolManager::with_config(
-                SymbolManagerConfig::default().use_debuginfod(true),
+                SymbolManagerConfig::default().use_debuginfod(false),
             )),
             global: Rc::new(RefCell::new(HashMap::new())),
         }
