@@ -32,15 +32,16 @@ fn stringify_frame_info(frame: &StackFrame, path: &PathBuf, info: FrameDebugInfo
             file_path: Some(file_path),
             line_number: Some(line_number),
         } => format!(
-            "{function} (from {path}; {}:{line_number})",
+            "0x{:x}:\t{function} (from {path}; {}:{line_number})",
+            frame.ip,
             file_path.display_path()
         ),
         FrameDebugInfo {
             function: Some(function),
             file_path: _,
             line_number: _,
-        } => function,
-        _ => format!("0x{:x} (from {path})", frame.ip),
+        } => format!("0x{:x}:\t{function}", frame.ip),
+        _ => format!("0x{:x}:\t(from {path})", frame.ip),
     }
 }
 
@@ -99,10 +100,7 @@ async fn main() -> Result<(), anyhow::Error> {
         bpf.take_map("STACKTRACES").unwrap(),
     )?);
 
-    let observed_stacktraces = Arc::new(Mutex::new(HashSet::<(
-        String,
-        [u64; STACK_DEDUPLICATION_DEPTH],
-    )>::new()));
+    let observed_stacktraces = Arc::new(Mutex::new(HashSet::<(String, Vec<u64>)>::new()));
 
     let keep_going = Arc::new(AtomicBool::new(true));
     let mut tasks = Vec::new();
@@ -276,8 +274,7 @@ async fn main() -> Result<(), anyhow::Error> {
                             stacktrace.frames().iter()
                                 .map(|frame| frame.ip)
                                 .take(STACK_DEDUPLICATION_DEPTH)
-                                .collect::<Vec<_>>()
-                                .try_into().unwrap())
+                                .collect::<Vec<_>>())
                         ) {
                             continue;
                         }

@@ -1,6 +1,7 @@
 use libc::pid_t;
 use log::warn;
 use std::cell::RefCell;
+use std::path::Path;
 use std::rc::Rc;
 use std::{
     cmp::Ordering, collections::HashMap, ffi::OsStr, fs, io, num::ParseIntError,
@@ -260,11 +261,19 @@ pub struct ProcMapResolverFactory {
 
 impl ProcMapResolverFactory {
     pub fn new(handle: Handle) -> Self {
+        let mut config = SymbolManagerConfig::default().use_debuginfod(false);
+
+        if let Some(home) = std::env::var_os("HOME") {
+            let cache = Path::new(&home).join(".cache/debuginfod_client");
+            if cache.exists() {
+                config = SymbolManagerConfig::default()
+                    .use_debuginfod(true)
+                    .debuginfod_cache_dir_if_not_installed(cache)
+            }
+        }
         Self {
             handle,
-            manager: Rc::new(SymbolManager::with_config(
-                SymbolManagerConfig::default().use_debuginfod(false),
-            )),
+            manager: Rc::new(SymbolManager::with_config(config)),
             global: Rc::new(RefCell::new(HashMap::new())),
         }
     }
