@@ -161,17 +161,16 @@ pub struct ProcMapResolver {
 impl ProcMapResolver {
     fn new(
         handle: Handle,
-        pid: pid_t,
+        procmap: ProcMap,
         manager: GlobalSymbolManager,
         global: GlobalSymbolCache,
-    ) -> Result<Self, ProcMapError> {
-        let procmap = ProcMap::new(pid)?;
-        Ok(ProcMapResolver {
+    ) -> Self {
+        ProcMapResolver {
             handle,
             procmap,
             manager,
             global,
-        })
+        }
     }
 
     pub fn resolve_symbol(&self, addr: u64) -> Option<(PathBuf, Option<Vec<FrameDebugInfo>>)> {
@@ -278,10 +277,10 @@ impl ProcMapResolverFactory {
         }
     }
 
-    pub fn resolver_for(&self, pid: pid_t) -> Result<ProcMapResolver, ProcMapError> {
+    pub fn resolver_for(&self, procmap: ProcMap) -> ProcMapResolver {
         ProcMapResolver::new(
             self.handle.clone(),
-            pid,
+            procmap,
             self.manager.clone(),
             self.global.clone(),
         )

@@ -1,15 +1,15 @@
 mod resolver;
 
-use crate::resolver::ProcMapResolverFactory;
+use crate::resolver::{ProcMap, ProcMapError, ProcMapResolverFactory};
 use aya::maps::stack_trace::{StackFrame, StackTrace};
 use aya::maps::{AsyncPerfEventArray, HashMap as AyaHashMap, StackTraceMap};
-use aya::programs::{FEntry, UProbe};
+use aya::programs::FEntry;
 use aya::util::online_cpus;
 use aya::{include_bytes_aligned, Bpf, Btf};
 use aya_log::BpfLogger;
 use bytes::BytesMut;
 use libc::pid_t;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, log, warn, Level};
 use os_sanitizer_common::{CopyViolation, FileAccessReport, FunctionInvocationReport};
 use std::collections::HashSet;
 use std::ffi::{c_char, CStr};
@@ -45,12 +45,49 @@ fn stringify_frame_info(frame: &StackFrame, path: &PathBuf, info: FrameDebugInfo
     }
 }
 
-enum ReportMessage {
-    Warning {
-        pid: u32,
-        warning: String,
-        stacktrace: StackTrace,
-    },
+struct ReportMessage {
+    procmap: Result<ProcMap, ProcMapError>,
+    level: Level,
+    message: String,
+    stacktrace: StackTrace,
+}
+
+macro_rules! attach_uprobe {
+    ($bpf: expr, $name: literal, $function: literal, $library: literal) => {
+        let program: &mut ::aya::programs::UProbe = $bpf
+            .program_mut(concat!("uprobe_", $name))
+            .unwrap()
+            .try_into()?;
+        program.load()?;
+        program.attach(Some($function), 0, $library, None)?;
+    };
+
+    ($bpf: expr, $name: literal, $function: literal) => {
+        attach_uprobe!($bpf, $name, $function, "libc")
+    };
+
+    ($bpf: expr, $name: literal) => {
+        attach_uprobe!($bpf, $name, $name, "libc")
+    };
+}
+
+macro_rules! attach_uretprobe {
+    ($bpf: expr, $name: literal, $function: literal, $library: literal) => {
+        let program: &mut ::aya::programs::UProbe = $bpf
+            .program_mut(concat!("uretprobe_", $name))
+            .unwrap()
+            .try_into()?;
+        program.load()?;
+        program.attach(Some($function), 0, $library, None)?;
+    };
+
+    ($bpf: expr, $name: literal, $function: literal) => {
+        attach_uretprobe!($bpf, $name, $function, "libc")
+    };
+
+    ($bpf: expr, $name: literal) => {
+        attach_uretprobe!($bpf, $name, $name, "libc")
+    };
 }
 
 #[tokio::main]
@@ -111,58 +148,57 @@ async fn main() -> Result<(), anyhow::Error> {
         let resolver_factory = ProcMapResolverFactory::new(handle.clone());
 
         while let Some(msg) = handle.block_on(rx_stacktrace.recv()) {
-            match msg {
-                ReportMessage::Warning {
-                    pid,
-                    warning,
-                    stacktrace,
-                } => {
-                    let stacktrace = if let Ok(resolver) =
-                        resolver_factory.resolver_for(pid as pid_t)
-                    {
-                        let mut individual_frames = Vec::new();
-                        for (i, frame) in stacktrace.frames().iter().enumerate() {
-                            if let Some((path, frames)) = resolver.resolve_symbol(frame.ip) {
-                                if let Some(frames) = frames {
-                                    for (j, info) in frames.into_iter().rev().enumerate().rev() {
-                                        if j == 0 {
-                                            individual_frames.push(format!(
-                                                "{i}:\t{}",
-                                                stringify_frame_info(frame, &path, info)
-                                            ));
-                                        } else {
-                                            individual_frames.push(format!(
-                                                "{i}[{j}]:\t{}",
-                                                stringify_frame_info(frame, &path, info)
-                                            ));
-                                        }
-                                    }
+            let ReportMessage {
+                procmap,
+                level,
+                message,
+                stacktrace,
+            } = msg;
+
+            let stacktrace = if let Ok(resolver) =
+                procmap.map(|procmap| resolver_factory.resolver_for(procmap))
+            {
+                let mut individual_frames = Vec::new();
+                for (i, frame) in stacktrace.frames().iter().enumerate() {
+                    if let Some((path, frames)) = resolver.resolve_symbol(frame.ip) {
+                        if let Some(frames) = frames {
+                            for (j, info) in frames.into_iter().rev().enumerate().rev() {
+                                if j == 0 {
+                                    individual_frames.push(format!(
+                                        "{i}:\t{}",
+                                        stringify_frame_info(frame, &path, info)
+                                    ));
                                 } else {
                                     individual_frames.push(format!(
-                                        "{i}:\t0x{:x} (from {})",
-                                        frame.ip,
-                                        path.to_string_lossy()
+                                        "{i}[{j}]:\t{}",
+                                        stringify_frame_info(frame, &path, info)
                                     ));
                                 }
-                                continue;
-                            } else {
-                                individual_frames.push(format!("{i}:\t0x{:x}", frame.ip));
                             }
+                        } else {
+                            individual_frames.push(format!(
+                                "{i}:\t0x{:x} (from {})",
+                                frame.ip,
+                                path.to_string_lossy()
+                            ));
                         }
-                        individual_frames.join("\n")
+                        continue;
                     } else {
-                        stacktrace
-                            .frames()
-                            .iter()
-                            .enumerate()
-                            .map(|(i, frame)| format!("{i}:\t0x{:x}", frame.ip))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    };
-
-                    warn!("{warning}; stacktrace:\n{stacktrace}");
+                        individual_frames.push(format!("{i}:\t0x{:x}", frame.ip));
+                    }
                 }
-            }
+                individual_frames.join("\n")
+            } else {
+                stacktrace
+                    .frames()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, frame)| format!("{i}:\t0x{:x}", frame.ip))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+
+            log!(level, "{message}; stacktrace:\n{stacktrace}");
         }
     });
 
@@ -254,7 +290,9 @@ async fn main() -> Result<(), anyhow::Error> {
                                 pid_tgid,
                                 stack_id,
                                 ..
-                            } | FunctionInvocationReport::Memcpy { executable, pid_tgid, stack_id, .. } => {
+                            } | FunctionInvocationReport::Memcpy { executable, pid_tgid, stack_id, .. }
+                              | FunctionInvocationReport::Access { executable, pid_tgid, stack_id, .. }
+                              | FunctionInvocationReport::Gets { executable, pid_tgid, stack_id, .. } => {
                                 let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
                                     error!("Couldn't recover the name of the executable.");
                                     continue;
@@ -266,6 +304,8 @@ async fn main() -> Result<(), anyhow::Error> {
                                 (executable.to_string(), (pid_tgid >> 32) as u32, pid_tgid as u32, stacktrace)
                             },
                         };
+
+                        let procmap = ProcMap::new(pid as pid_t);
 
                         let mut observed_lock =
                             observed_stacktraces.lock().await;
@@ -280,28 +320,50 @@ async fn main() -> Result<(), anyhow::Error> {
                         }
                         drop(observed_lock);
 
-                        let warning = match report {
+                        let (message, level) = match report {
                             FunctionInvocationReport::Strncpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
-                                format!("{executable} (pid: {pid}, thread: {tgid}) invoked strncpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})")
+                                (format!("{executable} (pid: {pid}, thread: {tgid}) invoked strncpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Warn)
                             }
                             FunctionInvocationReport::Strncpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
-                                format!("{executable} (pid: {pid}, thread: {tgid}) invoked strncpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})")
+                                (format!("{executable} (pid: {pid}, thread: {tgid}) invoked strncpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn)
                             }
                             FunctionInvocationReport::Memcpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
-                                format!("{executable} (pid: {pid}, thread: {tgid}) invoked memcpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})")
+                                (format!("{executable} (pid: {pid}, thread: {tgid}) invoked memcpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info)
                             }
                             FunctionInvocationReport::Memcpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
-                                format!("{executable} (pid: {pid}, thread: {tgid}) invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})")
+                                (format!("{executable} (pid: {pid}, thread: {tgid}) invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Error)
+                            }
+                            FunctionInvocationReport::Access { .. } => {
+                                (format!("{executable} (pid: {pid}, thread: {tgid}) invoked access, which is a syscall wrapper explicitly warned against"), Level::Info)
+                            }
+                            FunctionInvocationReport::Gets { .. } => {
+                                (format!("{executable} (pid: {pid}, thread: {tgid}) invoked gets, which is incredibly stupid"), Level::Error)
                             }
                         };
 
                         // only error condition is if rx is closed
-                        let _ = tx_stacktrace.send(ReportMessage::Warning { pid, warning, stacktrace });
+                        let _ = tx_stacktrace.send(ReportMessage { procmap, level, message, stacktrace });
                     }
                 }
             }));
         }
     }
+
+    attach_uprobe!(bpf, "malloc", "__libc_malloc");
+    attach_uretprobe!(bpf, "malloc", "__libc_malloc");
+
+    attach_uprobe!(bpf, "realloc", "__libc_realloc");
+    attach_uretprobe!(bpf, "realloc", "__libc_realloc");
+
+    attach_uprobe!(bpf, "free", "__libc_free");
+
+    attach_uprobe!(bpf, "strlen", "__strlen_avx2");
+    attach_uretprobe!(bpf, "strlen", "__strlen_avx2");
+
+    attach_uprobe!(bpf, "strncpy", "__strncpy_avx2");
+
+    attach_uprobe!(bpf, "access");
+    attach_uprobe!(bpf, "gets");
 
     let btf = Btf::from_sys_fs()?;
     let program: &mut FEntry = bpf
@@ -310,35 +372,6 @@ async fn main() -> Result<(), anyhow::Error> {
         .try_into()?;
     program.load("security_file_open", &btf)?;
     program.attach()?;
-
-    let program: &mut UProbe = bpf.program_mut("uprobe_malloc").unwrap().try_into()?;
-    program.load()?;
-    program.attach(Some("__libc_malloc"), 0, "libc", None)?;
-    let program: &mut UProbe = bpf.program_mut("uretprobe_malloc").unwrap().try_into()?;
-    program.load()?;
-    program.attach(Some("__libc_malloc"), 0, "libc", None)?;
-
-    let program: &mut UProbe = bpf.program_mut("uprobe_realloc").unwrap().try_into()?;
-    program.load()?;
-    program.attach(Some("__libc_realloc"), 0, "libc", None)?;
-    let program: &mut UProbe = bpf.program_mut("uretprobe_realloc").unwrap().try_into()?;
-    program.load()?;
-    program.attach(Some("__libc_realloc"), 0, "libc", None)?;
-
-    let program: &mut UProbe = bpf.program_mut("uprobe_free").unwrap().try_into()?;
-    program.load()?;
-    program.attach(Some("__libc_free"), 0, "libc", None)?;
-
-    let program: &mut UProbe = bpf.program_mut("uprobe_strlen").unwrap().try_into()?;
-    program.load()?;
-    program.attach(Some("__strlen_avx2"), 0, "libc", None)?;
-    let program: &mut UProbe = bpf.program_mut("uretprobe_strlen").unwrap().try_into()?;
-    program.load()?;
-    program.attach(Some("__strlen_avx2"), 0, "libc", None)?;
-
-    let program: &mut UProbe = bpf.program_mut("uprobe_strncpy").unwrap().try_into()?;
-    program.load()?;
-    program.attach(Some("__strncpy_avx2"), 0, "libc", None)?;
 
     // memcpy is very noisy! It seems there is some flaw in this logic
     // let program: &mut UProbe = bpf.program_mut("uprobe_memcpy").unwrap().try_into()?;

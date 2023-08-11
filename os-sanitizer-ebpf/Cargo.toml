@@ -8,6 +8,7 @@ aya-bpf = { git = "https://github.com/aya-rs/aya" }
 aya-bpf-macros = { git = "https://github.com/aya-rs/aya" }
 aya-log-ebpf = { git = "https://github.com/aya-rs/aya" }
 os-sanitizer-common = { path = "../os-sanitizer-common" }
+paste = "1.0"
 
 [build-dependencies]
 bindgen = "0.66"

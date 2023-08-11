@@ -674,6 +674,57 @@ unsafe fn try_uprobe_memcpy(probe: &ProbeContext) -> Result<u32, OsSanitizerErro
     Ok(0)
 }
 
+macro_rules! always_bad_call {
+    ($name: ident, $variant: ident) => {
+        ::paste::paste! {
+            #[uprobe]
+            fn [< uprobe_ $name >](probe: ProbeContext) -> u32 {
+                match unsafe { [< try_uprobe_ $name >](&probe) } {
+                    Ok(res) => res,
+                    Err(e) => emit_error(&probe, e, concat!(concat!("os_sanitizer_", stringify!($name)), "_uprobe")),
+                }
+            }
+
+            #[inline(always)]
+            unsafe fn [< try_uprobe_ $name >](probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
+                let pid_tgid = bpf_get_current_pid_tgid();
+
+                if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
+                    return Ok(0);
+                }
+
+                let stack_id = STACK_MAP
+                    .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
+                    .map_err(|e| CouldntRecoverStack(stringify!($name), e))? as u64;
+
+                let mut executable = [0u8; EXECUTABLE_LEN];
+
+                // we do this manually because the existing implementation is restricted to 16 bytes
+                let res = bpf_get_current_comm(
+                    executable.as_mut_ptr() as *mut c_void,
+                    executable.len() as u32,
+                );
+                if res < 0 {
+                    return Err(CouldntGetComm(concat!(stringify!($name), " comm"), res));
+                }
+
+                let report = FunctionInvocationReport::$variant {
+                    executable,
+                    pid_tgid,
+                    stack_id,
+                };
+
+                FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
+
+                Ok(0)
+            }
+        }
+    };
+}
+
+always_bad_call!(access, Access);
+always_bad_call!(gets, Gets);
+
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { unreachable_unchecked() }

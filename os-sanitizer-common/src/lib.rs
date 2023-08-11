@@ -50,6 +50,16 @@ pub enum FunctionInvocationReport {
         src: uintptr_t,
         variant: CopyViolation,
     },
+    Access {
+        executable: [u8; 128],
+        pid_tgid: u64,
+        stack_id: u64,
+    },
+    Gets {
+        executable: [u8; 128],
+        pid_tgid: u64,
+        stack_id: u64,
+    },
 }
 
 #[cfg(feature = "user")]
