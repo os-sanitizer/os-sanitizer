@@ -14,11 +14,12 @@ use os_sanitizer_common::{CopyViolation, FileAccessReport, FunctionInvocationRep
 use std::collections::HashSet;
 use std::ffi::{c_char, CStr};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use tokio::runtime::Handle;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tokio::{signal, task};
 use wholesym::FrameDebugInfo;
 
@@ -48,6 +49,7 @@ fn stringify_frame_info(frame: &StackFrame, path: &PathBuf, info: FrameDebugInfo
 struct ReportMessage {
     procmap: Result<ProcMap, ProcMapError>,
     level: Level,
+    executable: String,
     message: String,
     stacktrace: StackTrace,
 }
@@ -137,8 +139,6 @@ async fn main() -> Result<(), anyhow::Error> {
         bpf.take_map("STACKTRACES").unwrap(),
     )?);
 
-    let observed_stacktraces = Arc::new(Mutex::new(HashSet::<(String, Vec<u64>)>::new()));
-
     let keep_going = Arc::new(AtomicBool::new(true));
     let mut tasks = Vec::new();
 
@@ -146,11 +146,13 @@ async fn main() -> Result<(), anyhow::Error> {
     let handle = Handle::current();
     thread::spawn(move || {
         let resolver_factory = ProcMapResolverFactory::new(handle.clone());
+        let mut observed_stacktraces = HashSet::new();
 
         while let Some(msg) = handle.block_on(rx_stacktrace.recv()) {
             let ReportMessage {
                 procmap,
                 level,
+                executable,
                 message,
                 stacktrace,
             } = msg;
@@ -198,7 +200,19 @@ async fn main() -> Result<(), anyhow::Error> {
                     .join("\n")
             };
 
-            log!(level, "{message}; stacktrace:\n{stacktrace}");
+            let deduplication_sequence = stacktrace
+                .lines()
+                .take_while(|s| {
+                    s.split_once(':')
+                        .and_then(|(i, _)| usize::from_str(i).ok())
+                        .map_or(true, |i| i != STACK_DEDUPLICATION_DEPTH)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            if observed_stacktraces.insert((executable, deduplication_sequence)) {
+                log!(level, "{message}; stacktrace:\n{stacktrace}");
+            }
         }
     });
 
@@ -270,7 +284,6 @@ async fn main() -> Result<(), anyhow::Error> {
 
         let mut buf = function_reports.open(cpu_id, None)?;
         {
-            let observed_stacktraces = observed_stacktraces.clone();
             let stacktraces = stacktraces.clone();
             let tx_stacktrace = tx_stacktrace.clone();
             let keep_going = keep_going.clone();
@@ -307,19 +320,6 @@ async fn main() -> Result<(), anyhow::Error> {
 
                         let procmap = ProcMap::new(pid as pid_t);
 
-                        let mut observed_lock =
-                            observed_stacktraces.lock().await;
-                        if !observed_lock.insert((
-                            executable.clone(),
-                            stacktrace.frames().iter()
-                                .map(|frame| frame.ip)
-                                .take(STACK_DEDUPLICATION_DEPTH)
-                                .collect::<Vec<_>>())
-                        ) {
-                            continue;
-                        }
-                        drop(observed_lock);
-
                         let (message, level) = match report {
                             FunctionInvocationReport::Strncpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
                                 (format!("{executable} (pid: {pid}, thread: {tgid}) invoked strncpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Warn)
@@ -342,7 +342,7 @@ async fn main() -> Result<(), anyhow::Error> {
                         };
 
                         // only error condition is if rx is closed
-                        let _ = tx_stacktrace.send(ReportMessage { procmap, level, message, stacktrace });
+                        let _ = tx_stacktrace.send(ReportMessage { procmap, level, executable, message, stacktrace });
                     }
                 }
             }));
