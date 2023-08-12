@@ -51,7 +51,7 @@ fn stringify_frame_info(frame: &StackFrame, path: &PathBuf, info: FrameDebugInfo
             file_path: _,
             line_number: _,
         } => function,
-        _ => format!("0x{:x}:\t(from {path})", frame.ip),
+        _ => format!("0x{:x} (from {path})", frame.ip),
     }
 }
 

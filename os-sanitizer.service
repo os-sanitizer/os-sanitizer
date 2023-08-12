@@ -7,7 +7,7 @@ Type=simple
 Restart=always
 RestartSec=1
 User=root
-Environment="RUST_LOG=info"
+Environment="RUST_LOG=warn"
 ExecStart=/usr/local/sbin/os-sanitizer --access --gets
 
 [Install]
