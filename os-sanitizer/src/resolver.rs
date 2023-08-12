@@ -2,6 +2,7 @@ use libc::pid_t;
 use log::warn;
 use std::cell::RefCell;
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::{
     cmp::Ordering, collections::HashMap, ffi::OsStr, fs, io, num::ParseIntError,
@@ -190,64 +191,73 @@ impl ProcMapResolver {
         let entry = &self.procmap.entries[entry];
 
         if let Some(path) = entry.path() {
-            let mapping = {
-                let rlock = self.global.borrow();
-                if let Some(mapping) = rlock.get(path) {
-                    mapping.clone()
-                } else {
-                    drop(rlock);
-                    let maybe_map = match self
-                        .handle
-                        .block_on(self.manager.load_symbol_map_for_binary_at_path(&path, None))
-                    {
-                        Ok(map) => Some(map),
-                        Err(e) => {
-                            warn!(
-                                "Encountered error while loading {}: {e}",
-                                path.to_string_lossy()
-                            );
-                            None
-                        }
+            // avoid looking up private directories
+            if path.is_absolute() && !path.starts_with("/home") {
+                let mapping = {
+                    let rlock = self.global.borrow();
+                    if let Some(mapping) = rlock.get(path) {
+                        mapping.clone()
+                    } else {
+                        drop(rlock);
+                        let _ = Command::new("debuginfod-find")
+                            .arg("debuginfo")
+                            .arg(path)
+                            .stdin(Stdio::null())
+                            .stderr(Stdio::null())
+                            .stdout(Stdio::null())
+                            .status();
+                        let maybe_map = match self
+                            .handle
+                            .block_on(self.manager.load_symbol_map_for_binary_at_path(&path, None))
+                        {
+                            Ok(map) => Some(map),
+                            Err(e) => {
+                                warn!(
+                                    "Encountered error while loading {}: {e}",
+                                    path.to_string_lossy()
+                                );
+                                None
+                            }
+                        };
+                        let maybe_map = Rc::new(maybe_map);
+
+                        let mut wlock = self.global.borrow_mut();
+                        wlock.entry(path.clone()).or_insert(maybe_map).clone()
+                    }
+                };
+
+                if let Some(mapping) = mapping.as_ref().as_ref() {
+                    // offset into the range we found
+                    let Some(offset_in_range) = addr.checked_sub(entry.address()) else {
+                        unreachable!("guaranteed by lookup above")
                     };
-                    let maybe_map = Rc::new(maybe_map);
+                    // offset into the file
+                    let Some(raw_offset) = entry.offset().checked_add(offset_in_range) else {
+                        unreachable!("unimaginably large offset")
+                    };
 
-                    let mut wlock = self.global.borrow_mut();
-                    wlock.entry(path.clone()).or_insert(maybe_map).clone()
-                }
-            };
-
-            if let Some(mapping) = mapping.as_ref().as_ref() {
-                // offset into the range we found
-                let Some(offset_in_range) = addr.checked_sub(entry.address()) else {
-                    unreachable!("guaranteed by lookup above")
-                };
-                // offset into the file
-                let Some(raw_offset) = entry.offset().checked_add(offset_in_range) else {
-                    unreachable!("unimaginably large offset")
-                };
-
-                if let Some(info) = mapping.lookup_offset(raw_offset) {
-                    match info.frames {
-                        FramesLookupResult::Available(frames) => {
-                            return Some((path.clone(), Some(frames)))
+                    if let Some(info) = mapping.lookup_offset(raw_offset) {
+                        match info.frames {
+                            FramesLookupResult::Available(frames) => {
+                                return Some((path.clone(), Some(frames)))
+                            }
+                            FramesLookupResult::External(ext) => {
+                                return Some((
+                                    path.clone(),
+                                    self.handle.block_on(
+                                        self.manager
+                                            .lookup_external(&mapping.symbol_file_origin(), &ext),
+                                    ),
+                                ));
+                            }
+                            FramesLookupResult::Unavailable => {}
                         }
-                        FramesLookupResult::External(ext) => {
-                            return Some((
-                                path.clone(),
-                                self.handle.block_on(
-                                    self.manager
-                                        .lookup_external(&mapping.symbol_file_origin(), &ext),
-                                ),
-                            ));
-                        }
-                        FramesLookupResult::Unavailable => {}
                     }
                 }
+                return Some((path.clone(), None));
             }
-            Some((path.clone(), None))
-        } else {
-            None
         }
+        None
     }
 }
 

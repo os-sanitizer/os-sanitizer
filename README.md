@@ -27,6 +27,9 @@ RUST_LOG=info cargo xtask run
 
 ## Installing as a service
 
+You will need to adjust the `DEBUGINFOD_URLS` environmental variable according to your operating
+system.
+
 ```bash
 cargo xtask build-ebpf --release
 cargo build --release
