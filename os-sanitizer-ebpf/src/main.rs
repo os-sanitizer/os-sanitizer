@@ -19,7 +19,7 @@ use aya_bpf::maps::{HashMap, LruHashMap, PerfEventArray, StackTrace};
 use aya_bpf::programs::{FEntryContext, ProbeContext};
 use aya_bpf::BpfContext;
 use aya_bpf_macros::uretprobe;
-use aya_log_ebpf::error;
+use aya_log_ebpf::{debug, error, info, warn};
 use core::hint::unreachable_unchecked;
 use core::mem::offset_of;
 use os_sanitizer_common::CopyViolation::{Malloc, Strlen};
@@ -70,10 +70,10 @@ fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 
             );
         }
         CouldntRecoverStack(op, errno) => {
-            error!(probe, "{}: Couldn't recover stacktrace: {}", op, errno);
+            info!(probe, "{}: Couldn't recover stacktrace: {}", op, errno);
         }
         CouldntGetPath(op, errno) => {
-            error!(probe, "{}: Couldn't recover path: {}", op, errno);
+            debug!(probe, "{}: Couldn't recover path: {}", op, errno);
         }
         CouldntGetComm(op, errno) => {
             error!(probe, "{}: Couldn't recover comm: {}", op, errno);
@@ -85,7 +85,7 @@ fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 
             );
         }
         InvalidUtf8(op) => {
-            error!(
+            warn!(
                 probe,
                 "{}: Encountered invalid UTF8 while handling {}", op, name
             );
@@ -226,35 +226,16 @@ fn fentry_do_sys_openat2(probe: FEntryContext) -> u32 {
 #[inline(always)]
 unsafe fn try_fentry_do_sys_openat2(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
+
+    // we are opening another file; clear the last entry (still exists if the last open failed)
+    let _ = FLAGGED_FILE_OPEN_PIDS.remove(&pid_tgid);
+
     let usermode_ptr: uintptr_t = ctx.arg(1);
 
     if FACCESS_MAP.get(&(pid_tgid, usermode_ptr)).is_some() {
         FLAGGED_FILE_OPEN_PIDS
             .insert(&pid_tgid, &0, 0)
             .map_err(|_| Unreachable("openat2 map insertion failure"))?;
-
-        let stack_id = STACK_MAP
-            .get_stackid(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-            .map_err(|e| CouldntRecoverStack(stringify!($name), e))? as u64;
-
-        let mut executable = [0u8; EXECUTABLE_LEN];
-
-        // we do this manually because the existing implementation is restricted to 16 bytes
-        let res = bpf_get_current_comm(
-            executable.as_mut_ptr() as *mut c_void,
-            executable.len() as u32,
-        );
-        if res < 0 {
-            return Err(CouldntGetComm(concat!(stringify!($name), " comm"), res));
-        }
-
-        let report = OsSanitizerReport::AccessAndOpen {
-            executable,
-            pid_tgid,
-            stack_id,
-        };
-
-        FUNCTION_REPORT_QUEUE.output(ctx, &report, 0);
     }
 
     Ok(0)

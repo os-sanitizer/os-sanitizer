@@ -67,11 +67,6 @@ pub enum OsSanitizerReport {
         filename: [u8; FILENAME_LEN],
         variant: OpenViolation,
     },
-    AccessAndOpen {
-        executable: [u8; EXECUTABLE_LEN],
-        pid_tgid: u64,
-        stack_id: u64,
-    },
     Access {
         executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,

@@ -25,6 +25,7 @@ use tokio::{signal, task};
 use wholesym::FrameDebugInfo;
 
 const STACK_DEDUPLICATION_DEPTH: usize = 2;
+const STACK_MAX_DISPLAYED: usize = 7;
 
 fn stringify_frame_info(frame: &StackFrame, path: &PathBuf, info: FrameDebugInfo) -> String {
     let path = path.to_string_lossy();
@@ -187,6 +188,10 @@ async fn main() -> Result<(), anyhow::Error> {
             {
                 let mut individual_frames = Vec::new();
                 for (i, frame) in stacktrace.frames().iter().enumerate() {
+                    if i >= STACK_MAX_DISPLAYED {
+                        individual_frames.push("...".to_string());
+                        break;
+                    }
                     if let Some((path, frames)) = resolver.resolve_symbol(frame.ip) {
                         if let Some(frames) = frames {
                             for (j, info) in frames.into_iter().rev().enumerate().rev() {
@@ -261,7 +266,6 @@ async fn main() -> Result<(), anyhow::Error> {
                             OsSanitizerReport::Strncpy { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Memcpy { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Open { executable, pid_tgid, stack_id, .. }
-                              | OsSanitizerReport::AccessAndOpen { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Access { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Gets { executable, pid_tgid, stack_id, .. } => {
                                 let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
@@ -278,18 +282,24 @@ async fn main() -> Result<(), anyhow::Error> {
 
                         let procmap = ProcMap::new(pid as pid_t);
 
+                        let context = if pid == tgid {
+                            format!("{executable} (pid: {pid})")
+                        } else {
+                            format!("{executable} (pid: {pid}, thread: {tgid})")
+                        };
+
                         let (message, level) = match report {
                             OsSanitizerReport::Strncpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
-                                (format!("{executable} (pid: {pid}, thread: {tgid}) invoked strncpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Warn)
+                                (format!("{context} invoked strncpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info)
                             }
                             OsSanitizerReport::Strncpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
-                                (format!("{executable} (pid: {pid}, thread: {tgid}) invoked strncpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn)
+                                (format!("{context} invoked strncpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn)
                             }
                             OsSanitizerReport::Memcpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
-                                (format!("{executable} (pid: {pid}, thread: {tgid}) invoked memcpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info)
+                                (format!("{context} invoked memcpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info)
                             }
                             OsSanitizerReport::Memcpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
-                                (format!("{executable} (pid: {pid}, thread: {tgid}) invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Error)
+                                (format!("{context} invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn)
                             }
                             OsSanitizerReport::Open { i_mode, filename, variant, .. } => {
                                 let Ok(filename) = (unsafe {
@@ -329,24 +339,21 @@ async fn main() -> Result<(), anyhow::Error> {
                                         let rendered = core::str::from_utf8(&rendered).unwrap();
 
                                         if i_mode & 0xF000 == 0x8000 || i_mode & 0xF000 == 0x4000 {
-                                            (format!("{executable} (pid {pid}) requested `{filename}' (a {filetype}) with permissions {rendered}"), Level::Warn)
+                                            (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), Level::Warn)
                                         } else {
-                                            (format!("{executable} (pid {pid}) requested `{filename}' (a {filetype}) with permissions {rendered}"), Level::Info)
+                                            (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), Level::Info)
                                         }
                                     }
                                     OpenViolation::Toctou => {
-                                        (format!("{executable} (pid {pid}) requested `{filename}' (a {filetype}) after accessing it via access, a known TOCTOU pattern"), Level::Warn)
+                                        (format!("{context} opened `{filename}' (a {filetype}) after accessing it via access, a known TOCTOU pattern"), Level::Warn)
                                     }
                                 }
                             }
-                            OsSanitizerReport::AccessAndOpen { .. } => {
-                                (format!("{executable} (pid: {pid}, thread: {tgid}) invoked access and subsequently opened the file it accessed, which is a known TOCTOU pattern"), Level::Warn)
-                            }
                             OsSanitizerReport::Access { .. } => {
-                                (format!("{executable} (pid: {pid}, thread: {tgid}) invoked access, which is a syscall wrapper explicitly warned against"), Level::Info)
+                                (format!("{context} invoked access, which is a syscall wrapper explicitly warned against"), Level::Info)
                             }
                             OsSanitizerReport::Gets { .. } => {
-                                (format!("{executable} (pid: {pid}, thread: {tgid}) invoked gets, which is incredibly stupid"), Level::Error)
+                                (format!("{context} invoked gets, which is incredibly stupid"), Level::Error)
                             }
                         };
 
