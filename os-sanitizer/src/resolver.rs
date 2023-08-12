@@ -1,12 +1,14 @@
 use libc::pid_t;
 use log::warn;
+use lru::LruCache;
 use std::cell::RefCell;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::{
-    cmp::Ordering, collections::HashMap, ffi::OsStr, fs, io, num::ParseIntError,
-    os::unix::ffi::OsStrExt, path::PathBuf, str::Utf8Error,
+    cmp::Ordering, ffi::OsStr, fs, io, num::ParseIntError, os::unix::ffi::OsStrExt, path::PathBuf,
+    str::Utf8Error,
 };
 use thiserror::Error;
 use tokio::runtime::Handle;
@@ -14,6 +16,8 @@ use wholesym::{FrameDebugInfo, FramesLookupResult, SymbolManager, SymbolManagerC
 
 // TODO use the aya api for this when it is merged/made public
 // --- copy/pasted, then modified from: https://github.com/aya-rs/aya/pull/719 ---
+
+const RESOLVER_CACHE_SIZE: usize = 16;
 
 #[derive(Debug, Error)]
 pub enum ProcMapError {
@@ -150,7 +154,7 @@ impl TryFrom<&[u8]> for ProcMapEntry {
 
 type SymbolMapping = Option<SymbolMap>;
 type GlobalSymbolManager = Rc<SymbolManager>;
-type GlobalSymbolCache = Rc<RefCell<HashMap<PathBuf, Rc<SymbolMapping>>>>;
+type GlobalSymbolCache = Rc<RefCell<LruCache<PathBuf, Rc<SymbolMapping>>>>;
 
 pub struct ProcMapResolver {
     handle: Handle,
@@ -190,18 +194,17 @@ impl ProcMapResolver {
         };
         let entry = &self.procmap.entries[entry];
 
-        if let Some(path) = entry.path() {
+        let mut wlock = self.global.borrow_mut();
+        if let Some(path) = entry.path().and_then(|p| p.canonicalize().ok()) {
             // avoid looking up private directories
             if path.is_absolute() && !path.starts_with("/home") {
                 let mapping = {
-                    let rlock = self.global.borrow();
-                    if let Some(mapping) = rlock.get(path) {
-                        mapping.clone()
+                    if let Some(mapping) = wlock.get(&path) {
+                        mapping
                     } else {
-                        drop(rlock);
                         let _ = Command::new("debuginfod-find")
                             .arg("debuginfo")
-                            .arg(path)
+                            .arg(&path)
                             .stdin(Stdio::null())
                             .stderr(Stdio::null())
                             .stdout(Stdio::null())
@@ -221,12 +224,12 @@ impl ProcMapResolver {
                         };
                         let maybe_map = Rc::new(maybe_map);
 
-                        let mut wlock = self.global.borrow_mut();
-                        wlock.entry(path.clone()).or_insert(maybe_map).clone()
+                        let _ = wlock.put(path.clone(), maybe_map);
+                        wlock.get(&path).expect("just inserted")
                     }
                 };
 
-                if let Some(mapping) = mapping.as_ref().as_ref() {
+                if let Some(mapping) = mapping.as_ref() {
                     // offset into the range we found
                     let Some(offset_in_range) = addr.checked_sub(entry.address()) else {
                         unreachable!("guaranteed by lookup above")
@@ -239,11 +242,11 @@ impl ProcMapResolver {
                     if let Some(info) = mapping.lookup_offset(raw_offset) {
                         match info.frames {
                             FramesLookupResult::Available(frames) => {
-                                return Some((path.clone(), Some(frames)))
+                                return Some((path, Some(frames)))
                             }
                             FramesLookupResult::External(ext) => {
                                 return Some((
-                                    path.clone(),
+                                    path,
                                     self.handle.block_on(
                                         self.manager
                                             .lookup_external(&mapping.symbol_file_origin(), &ext),
@@ -254,7 +257,7 @@ impl ProcMapResolver {
                         }
                     }
                 }
-                return Some((path.clone(), None));
+                return Some((path, None));
             }
         }
         None
@@ -283,7 +286,9 @@ impl ProcMapResolverFactory {
         Self {
             handle,
             manager: Rc::new(SymbolManager::with_config(config)),
-            global: Rc::new(RefCell::new(HashMap::new())),
+            global: Rc::new(RefCell::new(LruCache::new(
+                NonZeroUsize::new(RESOLVER_CACHE_SIZE).unwrap(),
+            ))),
         }
     }
 

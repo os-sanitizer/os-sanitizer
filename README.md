@@ -44,3 +44,5 @@ You can then monitor for warnings under:
 ```bash
 sudo journalctl -b -fu os-sanitizer
 ```
+
+Be advised: symbol resolution is an expensive thing, memory and CPU-wise. Expect some memory usage.
