@@ -3,7 +3,8 @@
 use aya_bpf_cty::uintptr_t;
 use core::mem::size_of_val;
 
-pub const EXECUTABLE_LEN: usize = 128;
+pub const EXECUTABLE_LEN: usize = 16;
+pub const FILENAME_LEN: usize = 128;
 
 #[repr(u32)]
 pub enum OsSanitizerError {
@@ -11,6 +12,7 @@ pub enum OsSanitizerError {
     CouldntReadKernel(&'static str, uintptr_t, usize),
     CouldntReadUser(&'static str, uintptr_t, usize),
     CouldntRecoverStack(&'static str, i64),
+    CouldntGetPath(&'static str, i64),
     CouldntGetComm(&'static str, i64),
     CouldntAccessBuffer(&'static str),
     InvalidUtf8(&'static str),
@@ -22,6 +24,13 @@ pub enum OsSanitizerError {
 
 #[derive(Copy, Clone)]
 #[repr(u64, align(8))]
+pub enum OpenViolation {
+    Perms,
+    Toctou,
+}
+
+#[derive(Copy, Clone)]
+#[repr(u64, align(8))]
 pub enum CopyViolation {
     Strlen,
     Malloc,
@@ -29,7 +38,7 @@ pub enum CopyViolation {
 
 #[derive(Copy, Clone)]
 #[repr(u64, align(8))]
-pub enum FunctionInvocationReport {
+pub enum OsSanitizerReport {
     Strncpy {
         executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,
@@ -50,31 +59,33 @@ pub enum FunctionInvocationReport {
         src: uintptr_t,
         variant: CopyViolation,
     },
+    Open {
+        executable: [u8; EXECUTABLE_LEN],
+        pid_tgid: u64,
+        stack_id: u64,
+        i_mode: u16,
+        filename: [u8; FILENAME_LEN],
+        variant: OpenViolation,
+    },
+    AccessAndOpen {
+        executable: [u8; EXECUTABLE_LEN],
+        pid_tgid: u64,
+        stack_id: u64,
+    },
     Access {
-        executable: [u8; 128],
+        executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,
         stack_id: u64,
     },
     Gets {
-        executable: [u8; 128],
+        executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,
         stack_id: u64,
     },
 }
 
 #[cfg(feature = "user")]
-unsafe impl aya::Pod for FunctionInvocationReport {}
-
-#[derive(Copy, Clone)]
-pub struct FileAccessReport {
-    pub pid_tgid: u64,
-    pub i_mode: u16,
-    pub executable: [u8; EXECUTABLE_LEN],
-    pub filename: [u8; EXECUTABLE_LEN * 2],
-}
-
-#[cfg(feature = "user")]
-unsafe impl aya::Pod for FileAccessReport {}
+unsafe impl aya::Pod for OsSanitizerReport {}
 
 impl From<OsSanitizerError> for u32 {
     fn from(value: OsSanitizerError) -> Self {

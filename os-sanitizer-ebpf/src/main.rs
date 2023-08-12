@@ -23,21 +23,21 @@ use aya_log_ebpf::error;
 use core::hint::unreachable_unchecked;
 use core::mem::offset_of;
 use os_sanitizer_common::CopyViolation::{Malloc, Strlen};
+use os_sanitizer_common::OpenViolation::{Perms, Toctou};
 use os_sanitizer_common::OsSanitizerError::*;
 use os_sanitizer_common::{
-    approximate_range, CopyViolation, FileAccessReport, FunctionInvocationReport, OsSanitizerError,
-    EXECUTABLE_LEN,
+    approximate_range, CopyViolation, OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN,
+    FILENAME_LEN,
 };
 
 #[map(name = "IGNORED_PIDS")]
 pub static IGNORED_PIDS: HashMap<u32, u8> = HashMap::with_max_entries(1 << 12, 0);
 
-#[map(name = "FILE_REPORT_QUEUE")]
-pub static FILE_REPORT_QUEUE: PerfEventArray<FileAccessReport> =
-    PerfEventArray::with_max_entries(1 << 12, 0);
+#[map]
+pub static FLAGGED_FILE_OPEN_PIDS: LruHashMap<u64, u8> = LruHashMap::with_max_entries(1 << 12, 0);
 
 #[map(name = "FUNCTION_REPORT_QUEUE")]
-pub static FUNCTION_REPORT_QUEUE: PerfEventArray<FunctionInvocationReport> =
+pub static FUNCTION_REPORT_QUEUE: PerfEventArray<OsSanitizerReport> =
     PerfEventArray::with_max_entries(1 << 16, 0);
 
 #[map(name = "STACKTRACES")]
@@ -71,6 +71,9 @@ fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 
         }
         CouldntRecoverStack(op, errno) => {
             error!(probe, "{}: Couldn't recover stacktrace: {}", op, errno);
+        }
+        CouldntGetPath(op, errno) => {
+            error!(probe, "{}: Couldn't recover path: {}", op, errno);
         }
         CouldntGetComm(op, errno) => {
             error!(probe, "{}: Couldn't recover comm: {}", op, errno);
@@ -116,52 +119,142 @@ fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 
 fn fentry_security_file_open(probe: FEntryContext) -> u32 {
     match unsafe { try_fentry_security_file_open(&probe) } {
         Ok(res) => res,
-        Err(e) => emit_error(&probe, e, "os_sanitizer_security_file_open_kprobe"),
+        Err(e) => emit_error(&probe, e, "os_sanitizer_security_file_open_fentry"),
     }
 }
 
 #[inline(always)]
 unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
+        return Ok(0);
+    }
+
     let data: *const file = ctx.arg(0);
 
     let inode = (*data).f_inode;
     let i_mode = (*inode).i_mode;
 
-    if i_mode & 0b010 != 0 && i_mode & 0xF000 != 0xA000 {
-        let pid_tgid = bpf_get_current_pid_tgid();
+    let variant = if i_mode & 0b010 != 0 && i_mode & 0xF000 != 0xA000 {
+        Perms
+    } else if FLAGGED_FILE_OPEN_PIDS.get(&pid_tgid).is_some() {
+        let _ = FLAGGED_FILE_OPEN_PIDS.remove(&pid_tgid); // maybe removed by race
 
-        if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
-            return Ok(0);
-        }
+        Toctou
+    } else {
+        return Ok(0);
+    };
 
-        let mut report = FileAccessReport {
-            pid_tgid,
-            i_mode,
-            executable: [0; EXECUTABLE_LEN],
-            filename: [0; EXECUTABLE_LEN * 2],
-        };
+    let mut filename = [0; FILENAME_LEN];
+    let path = data as uintptr_t + offset_of!(file, f_path);
 
-        let len = report.filename.len() as u32;
-        let filename_ptr = report.filename.as_mut_ptr() as *mut c_char;
-        let path = data as uintptr_t + offset_of!(file, f_path);
+    let res = bpf_d_path(
+        path as *mut aya_bpf::bindings::path,
+        filename.as_mut_ptr() as *mut c_char,
+        filename.len() as u32,
+    );
+    if res < 0 {
+        return Err(CouldntGetPath("security_file_open", res));
+    }
 
-        bpf_d_path(path as *mut aya_bpf::bindings::path, filename_ptr, len);
+    if !filename.starts_with(b"/proc")
+        && !filename.starts_with(b"/sys")
+        && !filename.starts_with(b"/dev")
+    {
+        let mut executable = [0; EXECUTABLE_LEN];
 
         // we do this manually because the existing implementation is restricted to 16 bytes
         let res = bpf_get_current_comm(
-            report.executable.as_mut_ptr() as *mut c_void,
-            report.executable.len() as u32,
+            executable.as_mut_ptr() as *mut c_void,
+            executable.len() as u32,
         );
         if res < 0 {
-            return Err(CouldntGetComm("security_file_open comm", res));
+            return Err(CouldntGetComm("security_file_open", res));
         }
 
-        if !report.filename.starts_with(b"/proc")
-            && !report.filename.starts_with(b"/sys")
-            && !report.filename.starts_with(b"/dev")
-        {
-            FILE_REPORT_QUEUE.output(ctx, &report, 0);
+        let stack_id = STACK_MAP
+            .get_stackid(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
+            .map_err(|e| CouldntRecoverStack("security_file_open", e))?
+            as u64;
+
+        let report = OsSanitizerReport::Open {
+            executable,
+            pid_tgid,
+            stack_id,
+            i_mode,
+            filename,
+            variant,
+        };
+
+        FUNCTION_REPORT_QUEUE.output(ctx, &report, 0);
+    }
+
+    Ok(0)
+}
+
+#[map]
+static FACCESS_MAP: LruHashMap<(u64, uintptr_t), u8> = LruHashMap::with_max_entries(1 << 16, 0);
+
+#[fentry(function = "do_faccessat")]
+fn fentry_do_faccessat(probe: FEntryContext) -> u32 {
+    match unsafe { try_fentry_do_faccessat(&probe) } {
+        Ok(res) => res,
+        Err(e) => emit_error(&probe, e, "os_sanitizer_do_faccessat_fentry"),
+    }
+}
+
+#[inline(always)]
+unsafe fn try_fentry_do_faccessat(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let usermode_ptr: uintptr_t = ctx.arg(1);
+
+    FACCESS_MAP
+        .insert(&(pid_tgid, usermode_ptr), &0, 0)
+        .map_err(|_| Unreachable("faccessat map insertion failure"))?;
+
+    Ok(0)
+}
+
+#[fentry(function = "do_sys_openat2")]
+fn fentry_do_sys_openat2(probe: FEntryContext) -> u32 {
+    match unsafe { try_fentry_do_sys_openat2(&probe) } {
+        Ok(res) => res,
+        Err(e) => emit_error(&probe, e, "os_sanitizer_do_sys_openat2_fentry"),
+    }
+}
+
+#[inline(always)]
+unsafe fn try_fentry_do_sys_openat2(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let usermode_ptr: uintptr_t = ctx.arg(1);
+
+    if FACCESS_MAP.get(&(pid_tgid, usermode_ptr)).is_some() {
+        FLAGGED_FILE_OPEN_PIDS
+            .insert(&pid_tgid, &0, 0)
+            .map_err(|_| Unreachable("openat2 map insertion failure"))?;
+
+        let stack_id = STACK_MAP
+            .get_stackid(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
+            .map_err(|e| CouldntRecoverStack(stringify!($name), e))? as u64;
+
+        let mut executable = [0u8; EXECUTABLE_LEN];
+
+        // we do this manually because the existing implementation is restricted to 16 bytes
+        let res = bpf_get_current_comm(
+            executable.as_mut_ptr() as *mut c_void,
+            executable.len() as u32,
+        );
+        if res < 0 {
+            return Err(CouldntGetComm(concat!(stringify!($name), " comm"), res));
         }
+
+        let report = OsSanitizerReport::AccessAndOpen {
+            executable,
+            pid_tgid,
+            stack_id,
+        };
+
+        FUNCTION_REPORT_QUEUE.output(ctx, &report, 0);
     }
 
     Ok(0)
@@ -580,7 +673,7 @@ unsafe fn try_uprobe_strncpy(probe: &ProbeContext) -> Result<u32, OsSanitizerErr
             return Err(CouldntGetComm("strncpy comm", res));
         }
 
-        let report = FunctionInvocationReport::Strncpy {
+        let report = OsSanitizerReport::Strncpy {
             executable,
             pid_tgid,
             stack_id,
@@ -653,7 +746,7 @@ unsafe fn try_uprobe_memcpy(probe: &ProbeContext) -> Result<u32, OsSanitizerErro
             return Err(CouldntGetComm("memcpy comm", res));
         }
 
-        let report = FunctionInvocationReport::Memcpy {
+        let report = OsSanitizerReport::Memcpy {
             executable,
             pid_tgid,
             stack_id,
@@ -708,7 +801,7 @@ macro_rules! always_bad_call {
                     return Err(CouldntGetComm(concat!(stringify!($name), " comm"), res));
                 }
 
-                let report = FunctionInvocationReport::$variant {
+                let report = OsSanitizerReport::$variant {
                     executable,
                     pid_tgid,
                     stack_id,

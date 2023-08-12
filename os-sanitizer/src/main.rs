@@ -8,9 +8,10 @@ use aya::util::online_cpus;
 use aya::{include_bytes_aligned, Bpf, Btf};
 use aya_log::BpfLogger;
 use bytes::BytesMut;
+use clap::Parser;
 use libc::pid_t;
-use log::{debug, error, info, log, warn, Level};
-use os_sanitizer_common::{CopyViolation, FileAccessReport, FunctionInvocationReport};
+use log::{debug, info, log, warn, Level};
+use os_sanitizer_common::{CopyViolation, OpenViolation, OsSanitizerReport};
 use std::collections::HashSet;
 use std::ffi::{c_char, CStr};
 use std::path::PathBuf;
@@ -33,15 +34,14 @@ fn stringify_frame_info(frame: &StackFrame, path: &PathBuf, info: FrameDebugInfo
             file_path: Some(file_path),
             line_number: Some(line_number),
         } => format!(
-            "0x{:x}:\t{function} (from {path}; {}:{line_number})",
-            frame.ip,
+            "{function} (from {path}; {}:{line_number})",
             file_path.display_path()
         ),
         FrameDebugInfo {
             function: Some(function),
             file_path: _,
             line_number: _,
-        } => format!("0x{:x}:\t{function}", frame.ip),
+        } => function,
         _ => format!("0x{:x}:\t(from {path})", frame.ip),
     }
 }
@@ -52,6 +52,17 @@ struct ReportMessage {
     executable: String,
     message: String,
     stacktrace: StackTrace,
+}
+
+macro_rules! attach_fentry {
+    ($bpf: expr, $btf: expr, $name: literal) => {
+        let program: &mut FEntry = $bpf
+            .program_mut(concat!("fentry_", $name))
+            .unwrap()
+            .try_into()?;
+        program.load($name, &$btf)?;
+        program.attach()?;
+    };
 }
 
 macro_rules! attach_uprobe {
@@ -92,9 +103,25 @@ macro_rules! attach_uretprobe {
     };
 }
 
+#[derive(Parser, Debug)]
+#[clap(version, about, long_about = None)]
+struct Args {
+    #[arg(long)]
+    access: bool,
+    #[arg(long)]
+    gets: bool,
+    #[arg(long)]
+    memcpy: bool,
+    #[arg(long)]
+    security_file_open: bool,
+    #[arg(long)]
+    strncpy: bool,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
+    let args = Args::parse();
 
     // Bump the memlock rlimit. This is needed for older kernels that don't use the
     // new memcg based accounting, see https://lwn.net/Articles/837122/
@@ -130,9 +157,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let this_pid = std::process::id();
     ignored_pids.insert(this_pid, 0, 0)?;
 
-    let mut file_reports =
-        AsyncPerfEventArray::try_from(bpf.take_map("FILE_REPORT_QUEUE").unwrap())?;
-    let mut function_reports =
+    let mut reports =
         AsyncPerfEventArray::try_from(bpf.take_map("FUNCTION_REPORT_QUEUE").unwrap())?;
 
     let stacktraces = Arc::new(StackTraceMap::try_from(
@@ -217,72 +242,7 @@ async fn main() -> Result<(), anyhow::Error> {
     });
 
     for cpu_id in online_cpus()? {
-        let mut buf = file_reports.open(cpu_id, None)?;
-        {
-            let keep_going = keep_going.clone();
-            tasks.push(task::spawn(async move {
-                let mut buffers = (0..32)
-                    .map(|_| BytesMut::with_capacity(512))
-                    .collect::<Vec<_>>();
-
-                while keep_going.load(Ordering::Relaxed) {
-                    let events = buf.read_events(&mut buffers).await.unwrap();
-                    for buf in buffers.iter_mut().take(events.read) {
-                        let ptr = buf.as_ptr() as *const FileAccessReport;
-                        let report = unsafe { ptr.read_unaligned() };
-
-                        let Ok(filename) = (unsafe {
-                            CStr::from_ptr(report.filename.as_ptr() as *const c_char).to_str()
-                        }) else {
-                            continue;
-                        };
-                        let Ok(executable) = (unsafe {
-                            CStr::from_ptr(report.executable.as_ptr() as *const c_char).to_str()
-                        }) else {
-                            continue;
-                        };
-                        let i_mode = report.i_mode;
-                        let pid = report.pid_tgid as u32;
-
-                        let mut rendered = [0; 9];
-                        for (i, e) in rendered.iter_mut().enumerate() {
-                            let b = if i_mode & (0b1 << (9 - i - 1)) != 0 {
-                                match i % 3 {
-                                    0 => b'r',
-                                    1 => b'w',
-                                    2 => b'x',
-                                    _ => unreachable!(),
-                                }
-                            } else {
-                                b'-'
-                            };
-                            *e = b;
-                        }
-                        let rendered = core::str::from_utf8(&rendered).unwrap();
-
-                        let filetype = i_mode >> 12;
-                        let filetype = match filetype {
-                            0x1 => "fifo",
-                            0x2 => "chardev",
-                            0x4 => "directory",
-                            0x6 => "blockdev",
-                            0x8 => "file",
-                            0xA => "symlink",
-                            0xC => "socket",
-                            _ => unreachable!(),
-                        };
-
-                        if i_mode & 0xF000 == 0x8000 || i_mode & 0xF000 == 0x4000 {
-                            error!("{executable} (pid {pid}) requested `{filename}' (a {filetype}) with permissions {rendered}");
-                        } else {
-                            warn!("{executable} (pid {pid}) requested `{filename}' (a {filetype}) with permissions {rendered}")
-                        }
-                    }
-                }
-            }));
-        }
-
-        let mut buf = function_reports.open(cpu_id, None)?;
+        let mut buf = reports.open(cpu_id, None)?;
         {
             let stacktraces = stacktraces.clone();
             let tx_stacktrace = tx_stacktrace.clone();
@@ -295,23 +255,21 @@ async fn main() -> Result<(), anyhow::Error> {
                 while keep_going.load(Ordering::Relaxed) {
                     let events = buf.read_events(&mut buffers).await.unwrap();
                     for buf in buffers.iter_mut().take(events.read) {
-                        let report = unsafe { (buf.as_ptr() as *const FunctionInvocationReport).read_unaligned() };
+                        let report = unsafe { (buf.as_ptr() as *const OsSanitizerReport).read_unaligned() };
 
                         let (executable, pid, tgid, stacktrace) = match report {
-                            FunctionInvocationReport::Strncpy {
-                                executable,
-                                pid_tgid,
-                                stack_id,
-                                ..
-                            } | FunctionInvocationReport::Memcpy { executable, pid_tgid, stack_id, .. }
-                              | FunctionInvocationReport::Access { executable, pid_tgid, stack_id, .. }
-                              | FunctionInvocationReport::Gets { executable, pid_tgid, stack_id, .. } => {
+                            OsSanitizerReport::Strncpy { executable, pid_tgid, stack_id, .. }
+                              | OsSanitizerReport::Memcpy { executable, pid_tgid, stack_id, .. }
+                              | OsSanitizerReport::Open { executable, pid_tgid, stack_id, .. }
+                              | OsSanitizerReport::AccessAndOpen { executable, pid_tgid, stack_id, .. }
+                              | OsSanitizerReport::Access { executable, pid_tgid, stack_id, .. }
+                              | OsSanitizerReport::Gets { executable, pid_tgid, stack_id, .. } => {
                                 let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
-                                    error!("Couldn't recover the name of the executable.");
+                                    warn!("Couldn't recover the name of an executable.");
                                     continue;
                                 };
                                 let Ok(stacktrace) = stacktraces.get(&(stack_id as u32), 0) else {
-                                    error!("Couldn't recover the stacktrace of the executable {executable}.");
+                                    warn!("Couldn't recover the stacktrace of the executable {executable}.");
                                     continue;
                                 };
                                 (executable.to_string(), (pid_tgid >> 32) as u32, pid_tgid as u32, stacktrace)
@@ -321,22 +279,73 @@ async fn main() -> Result<(), anyhow::Error> {
                         let procmap = ProcMap::new(pid as pid_t);
 
                         let (message, level) = match report {
-                            FunctionInvocationReport::Strncpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
+                            OsSanitizerReport::Strncpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
                                 (format!("{executable} (pid: {pid}, thread: {tgid}) invoked strncpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Warn)
                             }
-                            FunctionInvocationReport::Strncpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
+                            OsSanitizerReport::Strncpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
                                 (format!("{executable} (pid: {pid}, thread: {tgid}) invoked strncpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn)
                             }
-                            FunctionInvocationReport::Memcpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
+                            OsSanitizerReport::Memcpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
                                 (format!("{executable} (pid: {pid}, thread: {tgid}) invoked memcpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info)
                             }
-                            FunctionInvocationReport::Memcpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
+                            OsSanitizerReport::Memcpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
                                 (format!("{executable} (pid: {pid}, thread: {tgid}) invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Error)
                             }
-                            FunctionInvocationReport::Access { .. } => {
+                            OsSanitizerReport::Open { i_mode, filename, variant, .. } => {
+                                let Ok(filename) = (unsafe {
+                                    CStr::from_ptr(filename.as_ptr() as *const c_char).to_str()
+                                }) else {
+                                    continue;
+                                };
+
+                                let filetype = i_mode >> 12;
+                                let filetype = match filetype {
+                                    0x1 => "fifo",
+                                    0x2 => "chardev",
+                                    0x4 => "directory",
+                                    0x6 => "blockdev",
+                                    0x8 => "file",
+                                    0xA => "symlink",
+                                    0xC => "socket",
+                                    _ => unreachable!(),
+                                };
+
+                                match variant {
+                                    OpenViolation::Perms => {
+                                        let mut rendered = [0; 9];
+                                        for (i, e) in rendered.iter_mut().enumerate() {
+                                            let b = if i_mode & (0b1 << (9 - i - 1)) != 0 {
+                                                match i % 3 {
+                                                    0 => b'r',
+                                                    1 => b'w',
+                                                    2 => b'x',
+                                                    _ => unreachable!(),
+                                                }
+                                            } else {
+                                                b'-'
+                                            };
+                                            *e = b;
+                                        }
+                                        let rendered = core::str::from_utf8(&rendered).unwrap();
+
+                                        if i_mode & 0xF000 == 0x8000 || i_mode & 0xF000 == 0x4000 {
+                                            (format!("{executable} (pid {pid}) requested `{filename}' (a {filetype}) with permissions {rendered}"), Level::Warn)
+                                        } else {
+                                            (format!("{executable} (pid {pid}) requested `{filename}' (a {filetype}) with permissions {rendered}"), Level::Info)
+                                        }
+                                    }
+                                    OpenViolation::Toctou => {
+                                        (format!("{executable} (pid {pid}) requested `{filename}' (a {filetype}) after accessing it via access, a known TOCTOU pattern"), Level::Warn)
+                                    }
+                                }
+                            }
+                            OsSanitizerReport::AccessAndOpen { .. } => {
+                                (format!("{executable} (pid: {pid}, thread: {tgid}) invoked access and subsequently opened the file it accessed, which is a known TOCTOU pattern"), Level::Warn)
+                            }
+                            OsSanitizerReport::Access { .. } => {
                                 (format!("{executable} (pid: {pid}, thread: {tgid}) invoked access, which is a syscall wrapper explicitly warned against"), Level::Info)
                             }
-                            FunctionInvocationReport::Gets { .. } => {
+                            OsSanitizerReport::Gets { .. } => {
                                 (format!("{executable} (pid: {pid}, thread: {tgid}) invoked gets, which is incredibly stupid"), Level::Error)
                             }
                         };
@@ -349,40 +358,46 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     }
 
-    attach_uprobe!(bpf, "malloc", "__libc_malloc");
-    attach_uretprobe!(bpf, "malloc", "__libc_malloc");
-
-    attach_uprobe!(bpf, "realloc", "__libc_realloc");
-    attach_uretprobe!(bpf, "realloc", "__libc_realloc");
-
-    attach_uprobe!(bpf, "free", "__libc_free");
-
-    attach_uprobe!(bpf, "strlen", "__strlen_avx2");
-    attach_uretprobe!(bpf, "strlen", "__strlen_avx2");
-
-    attach_uprobe!(bpf, "strncpy", "__strncpy_avx2");
-
-    attach_uprobe!(bpf, "access");
-    attach_uprobe!(bpf, "gets");
-
     let btf = Btf::from_sys_fs()?;
-    let program: &mut FEntry = bpf
-        .program_mut("fentry_security_file_open")
-        .unwrap()
-        .try_into()?;
-    program.load("security_file_open", &btf)?;
-    program.attach()?;
 
-    // memcpy is very noisy! It seems there is some flaw in this logic
-    // let program: &mut UProbe = bpf.program_mut("uprobe_memcpy").unwrap().try_into()?;
-    // program.load()?;
-    // program.attach(Some("__memcpy_avx_unaligned_erms"), 0, "libc", None)?;
+    if args.security_file_open || args.access {
+        attach_fentry!(bpf, btf, "security_file_open");
+    }
+
+    if args.memcpy || args.strncpy {
+        attach_uprobe!(bpf, "malloc", "__libc_malloc");
+        attach_uretprobe!(bpf, "malloc", "__libc_malloc");
+
+        attach_uprobe!(bpf, "realloc", "__libc_realloc");
+        attach_uretprobe!(bpf, "realloc", "__libc_realloc");
+
+        attach_uprobe!(bpf, "free", "__libc_free");
+
+        attach_uprobe!(bpf, "strlen", "__strlen_avx2");
+        attach_uretprobe!(bpf, "strlen", "__strlen_avx2");
+    }
+
+    if args.strncpy {
+        attach_uprobe!(bpf, "strncpy", "__strncpy_avx2");
+    }
+
+    if args.memcpy {
+        attach_uprobe!(bpf, "memcpy", "__memcpy_avx_unaligned_erms");
+    }
+
+    if args.access {
+        attach_fentry!(bpf, btf, "do_faccessat");
+        attach_fentry!(bpf, btf, "do_sys_openat2");
+        attach_uprobe!(bpf, "access");
+    }
+
+    if args.gets {
+        attach_uprobe!(bpf, "gets");
+    }
 
     info!("Waiting for Ctrl-C...");
     signal::ctrl_c().await?;
     info!("Exiting...");
-
-    program.unload()?;
 
     Ok(())
 }
