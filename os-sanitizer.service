@@ -8,7 +8,7 @@ Restart=always
 RestartSec=1
 User=root
 Environment="RUST_LOG=info"
-ExecStart=/usr/local/sbin/os-sanitizer
+ExecStart=/usr/local/sbin/os-sanitizer --access --gets
 
 [Install]
 WantedBy=multi-user.target

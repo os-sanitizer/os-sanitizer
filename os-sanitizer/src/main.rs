@@ -1,27 +1,35 @@
 mod resolver;
 
 use crate::resolver::{ProcMap, ProcMapError, ProcMapResolverFactory};
-use aya::maps::stack_trace::{StackFrame, StackTrace};
-use aya::maps::{AsyncPerfEventArray, HashMap as AyaHashMap, StackTraceMap};
-use aya::programs::FEntry;
-use aya::util::online_cpus;
-use aya::{include_bytes_aligned, Bpf, Btf};
+use aya::{
+    include_bytes_aligned,
+    maps::{
+        stack_trace::{StackFrame, StackTrace},
+        AsyncPerfEventArray, HashMap as AyaHashMap, StackTraceMap,
+    },
+    programs::FEntry,
+    util::online_cpus,
+    Bpf, Btf,
+};
 use aya_log::BpfLogger;
 use bytes::BytesMut;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use libc::pid_t;
-use log::{debug, info, log, warn, Level};
+use log::{debug, log, warn, Level};
 use os_sanitizer_common::{CopyViolation, OpenViolation, OsSanitizerReport};
-use std::collections::HashSet;
-use std::ffi::{c_char, CStr};
-use std::path::PathBuf;
-use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::thread;
-use tokio::runtime::Handle;
-use tokio::sync::mpsc;
-use tokio::{signal, task};
+use std::{
+    collections::HashSet,
+    ffi::{c_char, CStr},
+    path::PathBuf,
+    process::exit,
+    str::FromStr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread,
+};
+use tokio::{runtime::Handle, signal, sync::mpsc, task};
 use wholesym::FrameDebugInfo;
 
 const STACK_DEDUPLICATION_DEPTH: usize = 2;
@@ -107,15 +115,27 @@ macro_rules! attach_uretprobe {
 #[derive(Parser, Debug)]
 #[clap(version, about, long_about = None)]
 struct Args {
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Log violations related to the use of `access' (`faccessat' and related syscalls)"
+    )]
     access: bool,
-    #[arg(long)]
+    #[arg(long, help = "Log all uses of the `gets' function")]
     gets: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Log violations related to the use of `memcpy' (expensive and false-positive prone)"
+    )]
     memcpy: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Log violations related to the opening of files (monitors the `security_file_open' kernel function)"
+    )]
     security_file_open: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Log violations related to the use of `strncpy' (expensive)"
+    )]
     strncpy: bool,
 }
 
@@ -123,6 +143,12 @@ struct Args {
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
     let args = Args::parse();
+
+    if !(args.access || args.gets || args.memcpy || args.security_file_open || args.strncpy) {
+        eprintln!("You must specify one of the modes.");
+        <Args as CommandFactory>::command().print_help()?;
+        exit(1);
+    }
 
     // Bump the memlock rlimit. This is needed for older kernels that don't use the
     // new memcg based accounting, see https://lwn.net/Articles/837122/
@@ -402,9 +428,7 @@ async fn main() -> Result<(), anyhow::Error> {
         attach_uprobe!(bpf, "gets");
     }
 
-    info!("Waiting for Ctrl-C...");
     signal::ctrl_c().await?;
-    info!("Exiting...");
 
     Ok(())
 }
