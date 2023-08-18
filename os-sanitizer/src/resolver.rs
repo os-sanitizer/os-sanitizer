@@ -1,6 +1,6 @@
+use clru::CLruCache;
 use libc::pid_t;
 use log::warn;
-use lru::LruCache;
 use std::cell::RefCell;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -16,8 +16,6 @@ use wholesym::{FrameDebugInfo, FramesLookupResult, SymbolManager, SymbolManagerC
 
 // TODO use the aya api for this when it is merged/made public
 // --- copy/pasted, then modified from: https://github.com/aya-rs/aya/pull/719 ---
-
-const RESOLVER_CACHE_SIZE: usize = 16;
 
 #[derive(Debug, Error)]
 pub enum ProcMapError {
@@ -59,6 +57,22 @@ impl ProcMap {
 
     pub fn entries(&self) -> &[ProcMapEntry] {
         &self.entries
+    }
+
+    fn entry_for(&self, addr: u64) -> Option<&ProcMapEntry> {
+        let Ok(entry) = self
+            .entries()
+            .binary_search_by(|entry| match entry.address().cmp(&addr) {
+                Ordering::Less => match entry.address_end().cmp(&addr) {
+                    Ordering::Greater => Ordering::Equal,
+                    Ordering::Less | Ordering::Equal => Ordering::Less,
+                },
+                o @ (Ordering::Equal | Ordering::Greater) => o,
+            })
+        else {
+            return None;
+        };
+        Some(&self.entries[entry])
     }
 }
 
@@ -152,25 +166,55 @@ impl TryFrom<&[u8]> for ProcMapEntry {
 
 // --- end of copy/pasted section
 
+pub struct ProcMapOffsetResolver<'a> {
+    procmap: &'a ProcMap,
+}
+
+impl<'a> ProcMapOffsetResolver<'a> {
+    pub fn resolve_file_offset(&self, addr: u64) -> Option<(&Path, u64)> {
+        if let Some(entry) = self.procmap.entry_for(addr) {
+            if let Some(path) = entry.path() {
+                // offset into the range we found
+                let Some(offset_in_range) = addr.checked_sub(entry.address()) else {
+                    unreachable!("guaranteed by lookup above")
+                };
+                // offset into the file
+                let Some(raw_offset) = entry.offset().checked_add(offset_in_range) else {
+                    unreachable!("unimaginably large offset")
+                };
+
+                return Some((path, raw_offset));
+            }
+        }
+        None
+    }
+}
+
+impl<'a> From<&'a ProcMap> for ProcMapOffsetResolver<'a> {
+    fn from(procmap: &'a ProcMap) -> Self {
+        Self { procmap }
+    }
+}
+
 type SymbolMapping = Option<SymbolMap>;
 type GlobalSymbolManager = Rc<SymbolManager>;
-type GlobalSymbolCache = Rc<RefCell<LruCache<PathBuf, Rc<SymbolMapping>>>>;
+type GlobalSymbolCache = Rc<RefCell<CLruCache<PathBuf, Rc<SymbolMapping>>>>;
 
-pub struct ProcMapResolver {
+pub struct FileOffsetResolver {
     handle: Handle,
     procmap: ProcMap,
     manager: GlobalSymbolManager,
     global: GlobalSymbolCache,
 }
 
-impl ProcMapResolver {
+impl FileOffsetResolver {
     fn new(
         handle: Handle,
         procmap: ProcMap,
         manager: GlobalSymbolManager,
         global: GlobalSymbolCache,
     ) -> Self {
-        ProcMapResolver {
+        FileOffsetResolver {
             handle,
             procmap,
             manager,
@@ -179,20 +223,9 @@ impl ProcMapResolver {
     }
 
     pub fn resolve_symbol(&self, addr: u64) -> Option<(PathBuf, Option<Vec<FrameDebugInfo>>)> {
-        let Ok(entry) =
-            self.procmap
-                .entries()
-                .binary_search_by(|entry| match entry.address().cmp(&addr) {
-                    Ordering::Less => match entry.address_end().cmp(&addr) {
-                        Ordering::Greater => Ordering::Equal,
-                        Ordering::Less | Ordering::Equal => Ordering::Less,
-                    },
-                    o @ (Ordering::Equal | Ordering::Greater) => o,
-                })
-        else {
+        let Some(entry) = self.procmap.entry_for(addr) else {
             return None;
         };
-        let entry = &self.procmap.entries[entry];
 
         let mut wlock = self.global.borrow_mut();
         if let Some(path) = entry.path().and_then(|p| p.canonicalize().ok()) {
@@ -265,14 +298,14 @@ impl ProcMapResolver {
 }
 
 #[derive(Clone)]
-pub struct ProcMapResolverFactory {
+pub struct FileOffsetResolverFactory {
     handle: Handle,
     manager: GlobalSymbolManager,
     global: GlobalSymbolCache,
 }
 
-impl ProcMapResolverFactory {
-    pub fn new(handle: Handle) -> Self {
+impl FileOffsetResolverFactory {
+    pub fn new(handle: Handle, cache_size: NonZeroUsize) -> Self {
         let mut config = SymbolManagerConfig::default().use_debuginfod(false);
 
         if let Some(home) = std::env::var_os("HOME") {
@@ -286,14 +319,12 @@ impl ProcMapResolverFactory {
         Self {
             handle,
             manager: Rc::new(SymbolManager::with_config(config)),
-            global: Rc::new(RefCell::new(LruCache::new(
-                NonZeroUsize::new(RESOLVER_CACHE_SIZE).unwrap(),
-            ))),
+            global: Rc::new(RefCell::new(CLruCache::new(cache_size))),
         }
     }
 
-    pub fn resolver_for(&self, procmap: ProcMap) -> ProcMapResolver {
-        ProcMapResolver::new(
+    pub fn resolver_for(&self, procmap: ProcMap) -> FileOffsetResolver {
+        FileOffsetResolver::new(
             self.handle.clone(),
             procmap,
             self.manager.clone(),

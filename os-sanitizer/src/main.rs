@@ -1,12 +1,9 @@
 mod resolver;
 
-use crate::resolver::{ProcMap, ProcMapError, ProcMapResolverFactory};
+use crate::resolver::{ProcMap, ProcMapOffsetResolver};
 use aya::{
     include_bytes_aligned,
-    maps::{
-        stack_trace::{StackFrame, StackTrace},
-        AsyncPerfEventArray, HashMap as AyaHashMap, StackTraceMap,
-    },
+    maps::{AsyncPerfEventArray, HashMap as AyaHashMap, StackTraceMap},
     programs::FEntry,
     util::online_cpus,
     Bpf, Btf,
@@ -14,54 +11,30 @@ use aya::{
 use aya_log::BpfLogger;
 use bytes::BytesMut;
 use clap::{CommandFactory, Parser};
+use either::Either;
 use libc::pid_t;
 use log::{debug, log, warn, Level};
 use os_sanitizer_common::{CopyViolation, OpenViolation, OsSanitizerReport};
+use std::collections::HashMap;
+
+use std::time::Duration;
 use std::{
     collections::HashSet,
     ffi::{c_char, CStr},
-    path::PathBuf,
     process::exit,
     str::FromStr,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    thread,
 };
-use tokio::{runtime::Handle, signal, sync::mpsc, task};
-use wholesym::FrameDebugInfo;
+use tokio::sync::{Mutex, RwLock};
+use tokio::time::sleep;
+use tokio::{signal, task};
 
 const STACK_DEDUPLICATION_DEPTH: usize = 2;
 const STACK_MAX_DISPLAYED: usize = 7;
-
-fn stringify_frame_info(frame: &StackFrame, path: &PathBuf, info: FrameDebugInfo) -> String {
-    let path = path.to_string_lossy();
-    match info {
-        FrameDebugInfo {
-            function: Some(function),
-            file_path: Some(file_path),
-            line_number: Some(line_number),
-        } => format!(
-            "{function} (from {path}; {}:{line_number})",
-            file_path.display_path()
-        ),
-        FrameDebugInfo {
-            function: Some(function),
-            file_path: _,
-            line_number: _,
-        } => function,
-        _ => format!("0x{:x} (from {path})", frame.ip),
-    }
-}
-
-struct ReportMessage {
-    procmap: Result<ProcMap, ProcMapError>,
-    level: Level,
-    executable: String,
-    message: String,
-    stacktrace: StackTrace,
-}
+const PROCMAP_CACHE_TIME: u64 = 30;
 
 macro_rules! attach_fentry {
     ($bpf: expr, $btf: expr, $name: literal) => {
@@ -194,89 +167,16 @@ async fn main() -> Result<(), anyhow::Error> {
     let keep_going = Arc::new(AtomicBool::new(true));
     let mut tasks = Vec::new();
 
-    let (tx_stacktrace, mut rx_stacktrace) = mpsc::unbounded_channel::<ReportMessage>();
-    let handle = Handle::current();
-    thread::spawn(move || {
-        let resolver_factory = ProcMapResolverFactory::new(handle.clone());
-        let mut observed_stacktraces = HashSet::new();
+    let cached_procmaps = Arc::new(Mutex::new(HashMap::new()));
 
-        while let Some(msg) = handle.block_on(rx_stacktrace.recv()) {
-            let ReportMessage {
-                procmap,
-                level,
-                executable,
-                message,
-                stacktrace,
-            } = msg;
-
-            let stacktrace = if let Ok(resolver) =
-                procmap.map(|procmap| resolver_factory.resolver_for(procmap))
-            {
-                let mut individual_frames = Vec::new();
-                for (i, frame) in stacktrace.frames().iter().enumerate() {
-                    if i >= STACK_MAX_DISPLAYED {
-                        individual_frames.push("...".to_string());
-                        break;
-                    }
-                    if let Some((path, frames)) = resolver.resolve_symbol(frame.ip) {
-                        if let Some(frames) = frames {
-                            for (j, info) in frames.into_iter().rev().enumerate().rev() {
-                                if j == 0 {
-                                    individual_frames.push(format!(
-                                        "{i}:\t{}",
-                                        stringify_frame_info(frame, &path, info)
-                                    ));
-                                } else {
-                                    individual_frames.push(format!(
-                                        "{i}[{j}]:\t{}",
-                                        stringify_frame_info(frame, &path, info)
-                                    ));
-                                }
-                            }
-                        } else {
-                            individual_frames.push(format!(
-                                "{i}:\t0x{:x} (from {})",
-                                frame.ip,
-                                path.to_string_lossy()
-                            ));
-                        }
-                        continue;
-                    } else {
-                        individual_frames.push(format!("{i}:\t0x{:x}", frame.ip));
-                    }
-                }
-                individual_frames.join("\n")
-            } else {
-                stacktrace
-                    .frames()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, frame)| format!("{i}:\t0x{:x}", frame.ip))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            };
-
-            let deduplication_sequence = stacktrace
-                .lines()
-                .take_while(|s| {
-                    s.split_once(':')
-                        .and_then(|(i, _)| usize::from_str(i).ok())
-                        .map_or(true, |i| i != STACK_DEDUPLICATION_DEPTH)
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            if observed_stacktraces.insert((executable, deduplication_sequence)) {
-                log!(level, "{message}; stacktrace:\n{stacktrace}");
-            }
-        }
-    });
+    let observed_stacktraces = Arc::new(RwLock::new(HashSet::new()));
 
     for cpu_id in online_cpus()? {
         let mut buf = reports.open(cpu_id, None)?;
         {
             let stacktraces = stacktraces.clone();
-            let tx_stacktrace = tx_stacktrace.clone();
+            let observed_stacktraces = observed_stacktraces.clone();
+            let cached_procmaps = cached_procmaps.clone();
             let keep_going = keep_going.clone();
             tasks.push(task::spawn(async move {
                 let mut buffers = (0..32)
@@ -306,7 +206,16 @@ async fn main() -> Result<(), anyhow::Error> {
                             },
                         };
 
-                        let procmap = ProcMap::new(pid as pid_t);
+                        let procmap = {
+                            if let Ok(procmap) = ProcMap::new(pid as pid_t).map(Arc::new) {
+                                let mut cached_procmaps = cached_procmaps.lock().await;
+                                cached_procmaps.insert(pid, Arc::downgrade(&procmap));
+                                Some(procmap)
+                            } else {
+                                let cached_procmaps = cached_procmaps.lock().await;
+                                cached_procmaps.get(&pid).and_then(|weak| weak.upgrade())
+                            }
+                        };
 
                         let context = if pid == tgid {
                             format!("{executable} (pid: {pid})")
@@ -384,7 +293,81 @@ async fn main() -> Result<(), anyhow::Error> {
                         };
 
                         // only error condition is if rx is closed
-                        let _ = tx_stacktrace.send(ReportMessage { procmap, level, executable, message, stacktrace });
+                        let maybe_resolver =
+                            procmap.as_ref().map(|procmap| ProcMapOffsetResolver::from(procmap.as_ref()));
+
+                        let frame_iter = if let Some(resolver) = maybe_resolver.as_ref() {
+                            Either::Left(stacktrace.frames().iter().enumerate().map(|(i, frame)| {
+                                resolver.resolve_file_offset(frame.ip).map_or_else(
+                                    || format!("{i}:\t0x{:x}", frame.ip),
+                                    move |(path, offset)| {
+                                        if let Some(path) = path.to_str() {
+                                            format!("{i}:\t{path}+0x{offset:x}")
+                                        } else {
+                                            format!(
+                                                "{i}:\t{}+0x{offset:x} (name adjusted for utf-8 compat)",
+                                                path.to_string_lossy()
+                                            )
+                                        }
+                                    },
+                                )
+                            }))
+                        } else {
+                            Either::Right(
+                                stacktrace
+                                    .frames()
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, frame)| format!("{i}:\t0x{:x}", frame.ip)),
+                            )
+                        };
+
+                        let stacktrace = frame_iter
+                            .enumerate()
+                            .take_while(|(i, _)| *i <= STACK_MAX_DISPLAYED)
+                            .map(|(i, s)| {
+                                if i == STACK_MAX_DISPLAYED {
+                                    "...".to_string()
+                                } else {
+                                    s
+                                }
+                            })
+                            .collect::<Vec<_>>();
+
+                        let deduplication_sequence = stacktrace
+                            .iter()
+                            .cloned()
+                            .take_while(|s| {
+                                s.split_once(':')
+                                    .and_then(|(i, _)| usize::from_str(i).ok())
+                                    .map_or(true, |i| i < STACK_DEDUPLICATION_DEPTH)
+                            })
+                            .collect::<Vec<_>>();
+
+                        let stacktrace = stacktrace.join("\n");
+
+                        let value = (executable, deduplication_sequence);
+                        let rlock = observed_stacktraces.read().await;
+                        if !rlock.contains(&value) {
+                            log!(level, "{message}; stacktrace:\n{stacktrace}");
+                            drop(rlock);
+                            let mut wlock = observed_stacktraces.write().await;
+                            wlock.insert(value);
+                        }
+
+                        // send the procmap N seconds into the future to prevent it from being removed from the weak cache
+                        if let Some(procmap) = procmap {
+                            let cached_procmaps = cached_procmaps.clone();
+                            tokio::spawn(async move {
+                                sleep(Duration::from_secs(PROCMAP_CACHE_TIME)).await;
+                                let weakened = Arc::downgrade(&procmap);
+                                drop(procmap);
+                                if weakened.upgrade().is_none() {
+                                    let mut cached_procmaps = cached_procmaps.lock().await;
+                                    let _ = cached_procmaps.remove(&pid);
+                                }
+                            });
+                        }
                     }
                 }
             }));
