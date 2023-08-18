@@ -32,7 +32,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::time::sleep;
 use tokio::{signal, task};
 
-const STACK_DEDUPLICATION_DEPTH: usize = 2;
+const STACK_DEDUPLICATION_DEPTH: usize = 3;
 const STACK_MAX_DISPLAYED: usize = 7;
 const PROCMAP_CACHE_TIME: u64 = 30;
 
@@ -346,13 +346,12 @@ async fn main() -> Result<(), anyhow::Error> {
 
                         let stacktrace = stacktrace.join("\n");
 
-                        let value = (executable, deduplication_sequence);
                         let rlock = observed_stacktraces.read().await;
-                        if !rlock.contains(&value) {
+                        if !rlock.contains(&deduplication_sequence) {
                             log!(level, "{message}; stacktrace:\n{stacktrace}");
                             drop(rlock);
                             let mut wlock = observed_stacktraces.write().await;
-                            wlock.insert(value);
+                            wlock.insert(deduplication_sequence);
                         }
 
                         // send the procmap N seconds into the future to prevent it from being removed from the weak cache
