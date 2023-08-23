@@ -1,0 +1,15 @@
+[package]
+name = "os-sanitizer-symbolizer"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0"
+either = "1.9"
+env_logger = "0.10"
+log = "0.4"
+regex = "1.9.3"
+tokio = { version = "1.30.0", features = ["macros", "rt", "rt-multi-thread", "fs", "io-std", "process"] }
+wholesym = { git = "https://github.com/mstange/samply.git" }

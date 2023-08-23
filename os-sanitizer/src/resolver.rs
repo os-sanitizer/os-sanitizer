@@ -1,18 +1,10 @@
-use clru::CLruCache;
 use libc::pid_t;
-use log::warn;
-use std::cell::RefCell;
-use std::num::NonZeroUsize;
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::rc::Rc;
 use std::{
     cmp::Ordering, ffi::OsStr, fs, io, num::ParseIntError, os::unix::ffi::OsStrExt, path::PathBuf,
     str::Utf8Error,
 };
 use thiserror::Error;
-use tokio::runtime::Handle;
-use wholesym::{FrameDebugInfo, FramesLookupResult, SymbolManager, SymbolManagerConfig, SymbolMap};
 
 // TODO use the aya api for this when it is merged/made public
 // --- copy/pasted, then modified from: https://github.com/aya-rs/aya/pull/719 ---
@@ -193,142 +185,5 @@ impl<'a> ProcMapOffsetResolver<'a> {
 impl<'a> From<&'a ProcMap> for ProcMapOffsetResolver<'a> {
     fn from(procmap: &'a ProcMap) -> Self {
         Self { procmap }
-    }
-}
-
-type SymbolMapping = Option<SymbolMap>;
-type GlobalSymbolManager = Rc<SymbolManager>;
-type GlobalSymbolCache = Rc<RefCell<CLruCache<PathBuf, Rc<SymbolMapping>>>>;
-
-pub struct FileOffsetResolver {
-    handle: Handle,
-    procmap: ProcMap,
-    manager: GlobalSymbolManager,
-    global: GlobalSymbolCache,
-}
-
-impl FileOffsetResolver {
-    fn new(
-        handle: Handle,
-        procmap: ProcMap,
-        manager: GlobalSymbolManager,
-        global: GlobalSymbolCache,
-    ) -> Self {
-        FileOffsetResolver {
-            handle,
-            procmap,
-            manager,
-            global,
-        }
-    }
-
-    pub fn resolve_symbol(&self, addr: u64) -> Option<(PathBuf, Option<Vec<FrameDebugInfo>>)> {
-        let Some(entry) = self.procmap.entry_for(addr) else {
-            return None;
-        };
-
-        let mut wlock = self.global.borrow_mut();
-        if let Some(path) = entry.path().and_then(|p| p.canonicalize().ok()) {
-            // avoid looking up private directories
-            if path.is_absolute() && !path.starts_with("/home") {
-                let mapping = {
-                    if let Some(mapping) = wlock.get(&path) {
-                        mapping
-                    } else {
-                        let _ = Command::new("debuginfod-find")
-                            .arg("debuginfo")
-                            .arg(&path)
-                            .stdin(Stdio::null())
-                            .stderr(Stdio::null())
-                            .stdout(Stdio::null())
-                            .status();
-                        let maybe_map = match self
-                            .handle
-                            .block_on(self.manager.load_symbol_map_for_binary_at_path(&path, None))
-                        {
-                            Ok(map) => Some(map),
-                            Err(e) => {
-                                warn!(
-                                    "Encountered error while loading {}: {e}",
-                                    path.to_string_lossy()
-                                );
-                                None
-                            }
-                        };
-                        let maybe_map = Rc::new(maybe_map);
-
-                        let _ = wlock.put(path.clone(), maybe_map);
-                        wlock.get(&path).expect("just inserted")
-                    }
-                };
-
-                if let Some(mapping) = mapping.as_ref() {
-                    // offset into the range we found
-                    let Some(offset_in_range) = addr.checked_sub(entry.address()) else {
-                        unreachable!("guaranteed by lookup above")
-                    };
-                    // offset into the file
-                    let Some(raw_offset) = entry.offset().checked_add(offset_in_range) else {
-                        unreachable!("unimaginably large offset")
-                    };
-
-                    if let Some(info) = mapping.lookup_offset(raw_offset) {
-                        match info.frames {
-                            FramesLookupResult::Available(frames) => {
-                                return Some((path, Some(frames)))
-                            }
-                            FramesLookupResult::External(ext) => {
-                                return Some((
-                                    path,
-                                    self.handle.block_on(
-                                        self.manager
-                                            .lookup_external(&mapping.symbol_file_origin(), &ext),
-                                    ),
-                                ));
-                            }
-                            FramesLookupResult::Unavailable => {}
-                        }
-                    }
-                }
-                return Some((path, None));
-            }
-        }
-        None
-    }
-}
-
-#[derive(Clone)]
-pub struct FileOffsetResolverFactory {
-    handle: Handle,
-    manager: GlobalSymbolManager,
-    global: GlobalSymbolCache,
-}
-
-impl FileOffsetResolverFactory {
-    pub fn new(handle: Handle, cache_size: NonZeroUsize) -> Self {
-        let mut config = SymbolManagerConfig::default().use_debuginfod(false);
-
-        if let Some(home) = std::env::var_os("HOME") {
-            let cache = Path::new(&home).join(".cache/debuginfod_client");
-            if cache.exists() {
-                config = SymbolManagerConfig::default()
-                    .use_debuginfod(true)
-                    .debuginfod_cache_dir_if_not_installed(cache)
-            }
-        }
-        Self {
-            handle,
-            manager: Rc::new(SymbolManager::with_config(config)),
-            global: Rc::new(RefCell::new(CLruCache::new(cache_size))),
-        }
-    }
-
-    pub fn resolver_for(&self, procmap: ProcMap) -> FileOffsetResolver {
-        FileOffsetResolver::new(
-            self.handle.clone(),
-            procmap,
-            self.manager.clone(),
-            self.global.clone(),
-        )
     }
 }

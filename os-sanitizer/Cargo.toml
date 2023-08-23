@@ -14,15 +14,12 @@ os-sanitizer-common = { path = "../os-sanitizer-common", features = ["user"] }
 anyhow = "1"
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
-clru = "0.6"
 either = "1.9"
 env_logger = "0.10"
 libc = "0.2"
 log = "0.4"
 thiserror = "1.0"
-tokio = { version = "1.25", features = ["macros", "rt", "rt-multi-thread", "fs", "net", "signal", "sync"] }
-which = "4.4.0"
-wholesym = { git = "https://github.com/mstange/samply.git" }
+tokio = { version = "1.25", features = ["macros", "rt", "rt-multi-thread", "fs", "net", "signal", "sync", "time"] }
 
 [[bin]]
 name = "os-sanitizer"

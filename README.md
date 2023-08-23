@@ -22,10 +22,10 @@ cargo build
 ## Run
 
 ```bash
-RUST_LOG=info cargo xtask run
+RUST_LOG=info cargo xtask run --help
 ```
 
-## Installing as a service
+### Installing as a service
 
 You will need to adjust the `DEBUGINFOD_URLS` environmental variable according to your operating
 system.
@@ -46,3 +46,24 @@ sudo journalctl -b -fu os-sanitizer
 ```
 
 Be advised: symbol resolution is an expensive thing, memory and CPU-wise. Expect some memory usage.
+
+### Symbolisation
+
+To symbolise the logs from os-sanitizer, you will need to apply the symboliser to a _finite length_
+input. For example, you can run os-sanitizer and pipe it to a file:
+
+```bash
+RUST_LOG=info cargo xtask run --access | tee access.log
+```
+
+Then, in another terminal, you can do:
+
+```bash
+cargo run --release -p os-sanitizer-symbolizer access.log
+```
+
+If you're using the service form of os-sanitizer, you can similarly do:
+
+```bash
+sudo journalctl -b -u os-sanitizer | cargo run --release -p os-sanitizer-symbolizer
+```

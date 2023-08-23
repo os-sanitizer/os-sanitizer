@@ -49,23 +49,23 @@ fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 
         MissingArg(op, idx) => {
             error!(probe, "{}: Missing arg {} while handling {}", op, idx, name);
         }
-        CouldntReadKernel(op, ptr, _len) => {
+        CouldntReadKernel(op, ptr, num_bytes) => {
             error!(
                 probe,
                 "{}: Couldn't read kernel address 0x{:x} ({} bytes) while handling {}",
                 op,
                 ptr,
-                len,
+                num_bytes,
                 name
             );
         }
-        CouldntReadUser(op, ptr, _len) => {
+        CouldntReadUser(op, ptr, num_bytes) => {
             error!(
                 probe,
                 "{}: Couldn't read user address 0x{:x} ({} bytes) while handling {}",
                 op,
                 ptr,
-                len,
+                num_bytes,
                 name
             );
         }

@@ -1,2 +1,2 @@
 [workspace]
-members = ["xtask", "os-sanitizer", "os-sanitizer-common"]
+members = ["xtask", "os-sanitizer", "os-sanitizer-common", "os-sanitizer-symbolizer"]
