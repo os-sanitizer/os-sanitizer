@@ -67,3 +67,5 @@ If you're using the service form of os-sanitizer, you can similarly do:
 ```bash
 sudo journalctl -b -u os-sanitizer | cargo run --release -p os-sanitizer-symbolizer
 ```
+
+As a fun little bonus: os-sanitizer-symbolizer also symoblises ASAN stacktraces -- fun!

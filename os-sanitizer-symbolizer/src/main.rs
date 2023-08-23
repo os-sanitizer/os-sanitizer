@@ -3,6 +3,7 @@ use regex::bytes::RegexBuilder;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::future::{ready, Future};
+use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -86,7 +87,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let manager = SymbolManager::with_config(config);
 
-    let re = RegexBuilder::new(r"^(.+)([0-9]+):\s+(/.*)\+0x([0-9a-f]+)$")
+    let re = RegexBuilder::new(r"^(.+?) \((\/.*)\+0x([0-9a-f]+)\)\s*(?:\(BuildId:.+)?$")
         .multi_line(true)
         .build()
         .expect("This is a valid regex.");
@@ -119,14 +120,6 @@ async fn main() -> Result<(), anyhow::Error> {
             .expect("must have a set of spaces")
             .expect("it is unconditional")
             .as_bytes();
-        let frame_no: usize = core::str::from_utf8(
-            captures
-                .next()
-                .expect("we must have a frame number")
-                .expect("it is unconditional")
-                .as_bytes(),
-        )?
-        .parse()?;
         let path = core::str::from_utf8(
             captures
                 .next()
@@ -147,7 +140,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
         observed_paths.insert(path);
 
-        requiring_transform.push((i, prefix, actual.as_bytes(), frame_no, path, offset));
+        requiring_transform.push((i, prefix, actual.as_bytes(), path, offset));
     }
     plain.push(&source[last..]);
 
@@ -156,9 +149,9 @@ async fn main() -> Result<(), anyhow::Error> {
     for path in observed_paths {
         if !path.starts_with("/home") {
             if let Ok(resolver) = FileOffsetResolver::new(&manager, path).await {
-                for &(i, prefix, actual, frame_no, _, offset) in requiring_transform
+                for &(i, prefix, actual, _, offset) in requiring_transform
                     .iter()
-                    .filter(|(_, _, _, _, entry_path, _)| *entry_path == path)
+                    .filter(|(_, _, _, entry_path, _)| *entry_path == path)
                 {
                     if let Some(frames) = resolver
                         .resolve_symbol(&manager, offset)
@@ -166,36 +159,32 @@ async fn main() -> Result<(), anyhow::Error> {
                         .and_then(|frames| (!frames.is_empty()).then_some(frames))
                     {
                         for (inline, frame) in frames.into_iter().rev().enumerate().rev() {
-                            let frame_no = if inline == 0 {
-                                format!("{frame_no}")
+                            let mut completed = Vec::from(prefix);
+                            if inline != 0 {
+                                write!(&mut completed, "inlined ")?;
+                            }
+
+                            if let Some(f) = frame.function.as_ref() {
+                                write!(&mut completed, "in {f}")?;
                             } else {
-                                format!("{frame_no}[{inline}]")
-                            };
-                            let maybe_function = frame.function.as_ref().map_or_else(
-                                || Cow::from(format!("{path}+0x{offset:x}")),
-                                Cow::from,
-                            );
-                            let rendered = match &frame {
+                                write!(&mut completed, " ({path}+0x{offset:x})")?;
+                            }
+                            match &frame {
                                 FrameDebugInfo {
                                     file_path: Some(file_path),
                                     line_number: Some(line_number),
                                     ..
-                                } => format!(
-                                    "{frame_no}:\t{maybe_function} ({}:{line_number})",
+                                } => write!(
+                                    &mut completed,
+                                    " {}:{line_number}",
                                     file_path.display_path()
-                                ),
+                                )?,
                                 FrameDebugInfo {
                                     file_path: Some(file_path),
                                     ..
-                                } => format!(
-                                    "{frame_no}:\t{maybe_function} ({})",
-                                    file_path.display_path()
-                                ),
-                                _ => format!("{frame_no}:\t{maybe_function}",),
+                                } => write!(&mut completed, " {}", file_path.display_path())?,
+                                _ => {}
                             };
-
-                            let mut completed = Vec::from(prefix);
-                            completed.extend(rendered.into_bytes());
 
                             transformed.push((i, Cow::from(completed)))
                         }
@@ -206,9 +195,9 @@ async fn main() -> Result<(), anyhow::Error> {
                 continue;
             }
         }
-        for &(i, _, actual, _, _, _) in requiring_transform
+        for &(i, _, actual, _, _) in requiring_transform
             .iter()
-            .filter(|(_, _, _, _, entry_path, _)| *entry_path == path)
+            .filter(|(_, _, _, entry_path, _)| *entry_path == path)
         {
             transformed.push((i, Cow::Borrowed(actual)));
         }

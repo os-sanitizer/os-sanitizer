@@ -299,13 +299,14 @@ async fn main() -> Result<(), anyhow::Error> {
                         let frame_iter = if let Some(resolver) = maybe_resolver.as_ref() {
                             Either::Left(stacktrace.frames().iter().enumerate().map(|(i, frame)| {
                                 resolver.resolve_file_offset(frame.ip).map_or_else(
-                                    || format!("{i}:\t0x{:x}", frame.ip),
+                                    || format!("#{i} 0x{:x}", frame.ip),
                                     move |(path, offset)| {
                                         if let Some(path) = path.to_str() {
-                                            format!("{i}:\t{path}+0x{offset:x}")
+                                            format!("#{i} 0x{:x}  ({path}+0x{offset:x})", frame.ip)
                                         } else {
                                             format!(
-                                                "{i}:\t{}+0x{offset:x} (name adjusted for utf-8 compat)",
+                                                "#{i} 0x{:x}  {}+0x{offset:x} (name adjusted for utf-8 compat)",
+                                                frame.ip,
                                                 path.to_string_lossy()
                                             )
                                         }
@@ -318,7 +319,7 @@ async fn main() -> Result<(), anyhow::Error> {
                                     .frames()
                                     .iter()
                                     .enumerate()
-                                    .map(|(i, frame)| format!("{i}:\t0x{:x}", frame.ip)),
+                                    .map(|(i, frame)| format!("#{i} 0x{:x}", frame.ip)),
                             )
                         };
 
