@@ -8,8 +8,6 @@ Restart=always
 RestartSec=1
 User=root
 Environment="RUST_LOG=warn"
-Environment="HOME=/root/"
-Environment="DEBUGINFOD_URLS=https://debuginfod.fedoraproject.org/"
 ExecStart=/usr/local/sbin/os-sanitizer --access --gets
 
 [Install]
