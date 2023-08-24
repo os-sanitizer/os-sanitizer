@@ -1,4 +1,5 @@
 #![feature(offset_of)]
+#![feature(pointer_byte_offsets)]
 #![no_std]
 #![no_main]
 
@@ -8,7 +9,7 @@ pub static LICENSE: [u8; 4] = *b"GPL\0";
 #[allow(nonstandard_style, unused, clippy::all)]
 mod binding;
 
-use crate::binding::file;
+use crate::binding::{file, filename};
 use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_char, c_void, size_t, uintptr_t};
 use aya_bpf::helpers::gen::bpf_get_current_comm;
@@ -20,21 +21,24 @@ use aya_bpf::programs::{FEntryContext, ProbeContext};
 use aya_bpf::BpfContext;
 use aya_bpf_macros::uretprobe;
 use aya_log_ebpf::{debug, error, info, warn};
+use core::ffi::c_int;
 use core::hint::unreachable_unchecked;
 use core::mem::offset_of;
 use os_sanitizer_common::CopyViolation::{Malloc, Strlen};
 use os_sanitizer_common::OpenViolation::{Perms, Toctou};
 use os_sanitizer_common::OsSanitizerError::*;
+use os_sanitizer_common::ToctouVariant::{Access, Stat, Statx};
 use os_sanitizer_common::{
-    approximate_range, CopyViolation, OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN,
-    FILENAME_LEN,
+    approximate_range, CopyViolation, OsSanitizerError, OsSanitizerReport, ToctouVariant,
+    EXECUTABLE_LEN, FILENAME_LEN,
 };
 
 #[map(name = "IGNORED_PIDS")]
 pub static IGNORED_PIDS: HashMap<u32, u8> = HashMap::with_max_entries(1 << 12, 0);
 
 #[map]
-pub static FLAGGED_FILE_OPEN_PIDS: LruHashMap<u64, u8> = LruHashMap::with_max_entries(1 << 12, 0);
+pub static FLAGGED_FILE_OPEN_PIDS: LruHashMap<u64, ToctouVariant> =
+    LruHashMap::with_max_entries(1 << 12, 0);
 
 #[map(name = "FUNCTION_REPORT_QUEUE")]
 pub static FUNCTION_REPORT_QUEUE: PerfEventArray<OsSanitizerReport> =
@@ -135,12 +139,12 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
     let inode = (*data).f_inode;
     let i_mode = (*inode).i_mode;
 
-    let variant = if i_mode & 0b010 != 0 && i_mode & 0xF000 != 0xA000 {
-        Perms
-    } else if FLAGGED_FILE_OPEN_PIDS.get(&pid_tgid).is_some() {
+    let (variant, toctou) = if i_mode & 0b010 != 0 && i_mode & 0xF000 != 0xA000 {
+        (Perms, None)
+    } else if let Some(&variant) = FLAGGED_FILE_OPEN_PIDS.get(&pid_tgid) {
         let _ = FLAGGED_FILE_OPEN_PIDS.remove(&pid_tgid); // maybe removed by race
 
-        Toctou
+        (Toctou, Some(variant))
     } else {
         return Ok(0);
     };
@@ -184,6 +188,7 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
             i_mode,
             filename,
             variant,
+            toctou,
         };
 
         FUNCTION_REPORT_QUEUE.output(ctx, &report, 0);
@@ -193,7 +198,8 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
 }
 
 #[map]
-static FACCESS_MAP: LruHashMap<(u64, uintptr_t), u8> = LruHashMap::with_max_entries(1 << 16, 0);
+static ACCESS_MAP: LruHashMap<(u64, c_int, uintptr_t), ToctouVariant> =
+    LruHashMap::with_max_entries(1 << 16, 0);
 
 #[fentry(function = "do_faccessat")]
 fn fentry_do_faccessat(probe: FEntryContext) -> u32 {
@@ -206,11 +212,56 @@ fn fentry_do_faccessat(probe: FEntryContext) -> u32 {
 #[inline(always)]
 unsafe fn try_fentry_do_faccessat(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
+    let dfd: c_int = ctx.arg(0);
     let usermode_ptr: uintptr_t = ctx.arg(1);
 
-    FACCESS_MAP
-        .insert(&(pid_tgid, usermode_ptr), &0, 0)
-        .map_err(|_| Unreachable("faccessat map insertion failure"))?;
+    ACCESS_MAP
+        .insert(&(pid_tgid, dfd, usermode_ptr), &Access, 0)
+        .map_err(|_| Unreachable("map insertion failure"))?;
+
+    Ok(0)
+}
+
+#[fentry(function = "vfs_fstatat")]
+fn fentry_vfs_fstatat(probe: FEntryContext) -> u32 {
+    match unsafe { try_fentry_vfs_fstatat(&probe) } {
+        Ok(res) => res,
+        Err(e) => emit_error(&probe, e, "os_sanitizer_vfs_fstatat_fentry"),
+    }
+}
+
+#[inline(always)]
+unsafe fn try_fentry_vfs_fstatat(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let dfd: c_int = ctx.arg(0);
+    let usermode_ptr: uintptr_t = ctx.arg(1);
+
+    ACCESS_MAP
+        .insert(&(pid_tgid, dfd, usermode_ptr), &Stat, 0)
+        .map_err(|_| Unreachable("map insertion failure"))?;
+
+    Ok(0)
+}
+
+#[fentry(function = "do_statx")]
+fn fentry_do_statx(probe: FEntryContext) -> u32 {
+    match unsafe { try_fentry_do_statx(&probe) } {
+        Ok(res) => res,
+        Err(e) => emit_error(&probe, e, "os_sanitizer_do_statx_fentry"),
+    }
+}
+
+#[inline(always)]
+unsafe fn try_fentry_do_statx(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let dfd: c_int = ctx.arg(0);
+
+    let filename_ptr: *const filename = ctx.arg(1);
+    let usermode_ptr = (*filename_ptr).uptr as uintptr_t;
+
+    ACCESS_MAP
+        .insert(&(pid_tgid, dfd, usermode_ptr as uintptr_t), &Statx, 0)
+        .map_err(|_| Unreachable("map insertion failure"))?;
 
     Ok(0)
 }
@@ -230,12 +281,13 @@ unsafe fn try_fentry_do_sys_openat2(ctx: &FEntryContext) -> Result<u32, OsSaniti
     // we are opening another file; clear the last entry (still exists if the last open failed)
     let _ = FLAGGED_FILE_OPEN_PIDS.remove(&pid_tgid);
 
+    let dfd: c_int = ctx.arg(0);
     let usermode_ptr: uintptr_t = ctx.arg(1);
 
-    if FACCESS_MAP.get(&(pid_tgid, usermode_ptr)).is_some() {
+    if let Some(&variant) = ACCESS_MAP.get(&(pid_tgid, dfd, usermode_ptr)) {
         FLAGGED_FILE_OPEN_PIDS
-            .insert(&pid_tgid, &0, 0)
-            .map_err(|_| Unreachable("openat2 map insertion failure"))?;
+            .insert(&pid_tgid, &variant, 0)
+            .map_err(|_| Unreachable("map insertion failure"))?;
     }
 
     Ok(0)

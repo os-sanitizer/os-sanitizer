@@ -40,23 +40,35 @@ const PROCMAP_CACHE_TIME: u64 = 30;
 
 macro_rules! attach_fentry {
     ($bpf: expr, $btf: expr, $name: literal) => {
+        #[allow(unused_imports)]
+        use ::std::io::Write as _;
+
+        print!("loading {}...", $name);
+        let _ = std::io::stdout().lock().flush();
         let program: &mut FEntry = $bpf
             .program_mut(concat!("fentry_", $name))
             .unwrap()
             .try_into()?;
         program.load($name, &$btf)?;
         program.attach()?;
+        println!("done");
     };
 }
 
 macro_rules! attach_uprobe {
     ($bpf: expr, $name: literal, $function: literal, $library: literal) => {
+        #[allow(unused_imports)]
+        use ::std::io::Write as _;
+
+        print!("loading {}...", $name);
+        let _ = std::io::stdout().lock().flush();
         let program: &mut ::aya::programs::UProbe = $bpf
             .program_mut(concat!("uprobe_", $name))
             .unwrap()
             .try_into()?;
         program.load()?;
         program.attach(Some($function), 0, $library, None)?;
+        println!("done");
     };
 
     ($bpf: expr, $name: literal, $function: literal) => {
@@ -70,12 +82,18 @@ macro_rules! attach_uprobe {
 
 macro_rules! attach_uretprobe {
     ($bpf: expr, $name: literal, $function: literal, $library: literal) => {
+        #[allow(unused_imports)]
+        use ::std::io::Write as _;
+
+        print!("loading {}...", $name);
+        let _ = std::io::stdout().lock().flush();
         let program: &mut ::aya::programs::UProbe = $bpf
             .program_mut(concat!("uretprobe_", $name))
             .unwrap()
             .try_into()?;
         program.load()?;
         program.attach(Some($function), 0, $library, None)?;
+        println!("done");
     };
 
     ($bpf: expr, $name: literal, $function: literal) => {
@@ -251,7 +269,7 @@ async fn main() -> Result<(), anyhow::Error> {
                             OsSanitizerReport::Memcpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
                                 (format!("{context} invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn)
                             }
-                            OsSanitizerReport::Open { i_mode, filename, variant, .. } => {
+                            OsSanitizerReport::Open { i_mode, filename, variant, toctou, .. } => {
                                 let Ok(filename) = (unsafe {
                                     CStr::from_ptr(filename.as_ptr() as *const c_char).to_str()
                                 }) else {
@@ -270,8 +288,8 @@ async fn main() -> Result<(), anyhow::Error> {
                                     _ => unreachable!(),
                                 };
 
-                                match variant {
-                                    OpenViolation::Perms => {
+                                match (variant, toctou) {
+                                    (OpenViolation::Perms, None) => {
                                         let mut rendered = [0; 9];
                                         for (i, e) in rendered.iter_mut().enumerate() {
                                             let b = if i_mode & (0b1 << (9 - i - 1)) != 0 {
@@ -294,9 +312,10 @@ async fn main() -> Result<(), anyhow::Error> {
                                             (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), Level::Info)
                                         }
                                     }
-                                    OpenViolation::Toctou => {
-                                        (format!("{context} opened `{filename}' (a {filetype}) after accessing it via access, a known TOCTOU pattern"), Level::Warn)
+                                    (OpenViolation::Toctou, Some(variant)) => {
+                                        (format!("{context} opened `{filename}' (a {filetype}) after accessing it via {variant}, a known TOCTOU pattern"), Level::Warn)
                                     }
+                                    _ => unreachable!("Invalid combination of reporting data")
                                 }
                             }
                             OsSanitizerReport::Access { .. } => {
@@ -418,6 +437,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
     if args.access {
         attach_fentry!(bpf, btf, "do_faccessat");
+        attach_fentry!(bpf, btf, "vfs_fstatat");
+        attach_fentry!(bpf, btf, "do_statx");
         attach_fentry!(bpf, btf, "do_sys_openat2");
         attach_uprobe!(bpf, "access");
     }

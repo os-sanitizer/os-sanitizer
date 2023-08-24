@@ -24,6 +24,25 @@ pub enum OsSanitizerError {
 
 #[derive(Copy, Clone)]
 #[repr(u64, align(8))]
+pub enum ToctouVariant {
+    Access,
+    Stat,
+    Statx,
+}
+
+#[cfg(feature = "user")]
+impl std::fmt::Display for ToctouVariant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ToctouVariant::Access => f.write_str("access"),
+            ToctouVariant::Stat => f.write_str("stat"),
+            ToctouVariant::Statx => f.write_str("statx"),
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+#[repr(u64, align(8))]
 pub enum OpenViolation {
     Perms,
     Toctou,
@@ -66,6 +85,7 @@ pub enum OsSanitizerReport {
         i_mode: u16,
         filename: [u8; FILENAME_LEN],
         variant: OpenViolation,
+        toctou: Option<ToctouVariant>,
     },
     Access {
         executable: [u8; EXECUTABLE_LEN],
