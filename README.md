@@ -27,9 +27,6 @@ RUST_LOG=info cargo xtask run --help
 
 ### Installing as a service
 
-You will need to adjust the `DEBUGINFOD_URLS` environmental variable according to your operating
-system.
-
 ```bash
 cargo xtask build-ebpf --release
 cargo build --release
@@ -45,9 +42,10 @@ You can then monitor for warnings under:
 sudo journalctl -b -fu os-sanitizer
 ```
 
-Be advised: symbol resolution is an expensive thing, memory and CPU-wise. Expect some memory usage.
-
 ### Symbolisation
+
+You need to install `debuginfod-find` for your system and set the `DEBUGINFOD_URLS` variable
+accordingly before using symbolisation.
 
 To symbolise the logs from os-sanitizer, you will need to apply the symboliser to a _finite length_
 input. For example, you can run os-sanitizer and pipe it to a file:

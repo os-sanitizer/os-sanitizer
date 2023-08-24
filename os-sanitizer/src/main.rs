@@ -34,8 +34,6 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::time::sleep;
 use tokio::{signal, task};
 
-const STACK_DEDUPLICATION_DEPTH: usize = 3;
-const STACK_MAX_DISPLAYED: usize = 7;
 const PROCMAP_CACHE_TIME: u64 = 30;
 
 macro_rules! attach_fentry {
@@ -130,6 +128,21 @@ struct Args {
         help = "Log violations related to the use of `strncpy' (expensive)"
     )]
     strncpy: bool,
+
+    #[arg(
+        long,
+        short,
+        help = "Stack deduplication depth, or 0 to deduplicate over the full stack.",
+        default_value = "3"
+    )]
+    dedup_depth: usize,
+    #[arg(
+        long,
+        short,
+        help = "Stack depth shown, or 0 to show the full stack.",
+        default_value = "7"
+    )]
+    visibility_depth: usize,
 }
 
 #[tokio::main]
@@ -142,6 +155,17 @@ async fn main() -> Result<(), anyhow::Error> {
         <Args as CommandFactory>::command().print_help()?;
         exit(1);
     }
+
+    let dedup_depth = if args.dedup_depth == 0 {
+        usize::MAX
+    } else {
+        args.dedup_depth
+    };
+    let visibility_depth = if args.visibility_depth == 0 {
+        usize::MAX
+    } else {
+        args.visibility_depth
+    };
 
     // Bump the memlock rlimit. This is needed for older kernels that don't use the
     // new memcg based accounting, see https://lwn.net/Articles/837122/
@@ -359,9 +383,9 @@ async fn main() -> Result<(), anyhow::Error> {
 
                         let stacktrace = frame_iter
                             .enumerate()
-                            .take_while(|(i, _)| *i <= STACK_MAX_DISPLAYED)
+                            .take_while(|(i, _)| *i <= visibility_depth)
                             .map(|(i, s)| {
-                                if i == STACK_MAX_DISPLAYED {
+                                if i == visibility_depth {
                                     "...".to_string()
                                 } else {
                                     s
@@ -375,14 +399,13 @@ async fn main() -> Result<(), anyhow::Error> {
                             .take_while(|s| {
                                 s.split_once(':')
                                     .and_then(|(i, _)| usize::from_str(i).ok())
-                                    .map_or(true, |i| i < STACK_DEDUPLICATION_DEPTH)
+                                    .map_or(true, |i| i < dedup_depth)
                             })
                             .collect::<Vec<_>>();
 
-                        let stacktrace = stacktrace.join("\n");
-
                         let rlock = observed_stacktraces.read().await;
                         if !rlock.contains(&deduplication_sequence) {
+                            let stacktrace = stacktrace.join("\n");
                             log!(level, "{message}; stacktrace:\n{stacktrace}");
                             drop(rlock);
                             let mut wlock = observed_stacktraces.write().await;
