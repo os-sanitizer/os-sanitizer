@@ -17,6 +17,8 @@ use log::{debug, log, warn, Level};
 use os_sanitizer_common::{CopyViolation, OpenViolation, OsSanitizerReport};
 use std::collections::HashMap;
 
+use std::collections::hash_map::Entry;
+use std::sync::Weak;
 use std::time::Duration;
 use std::{
     collections::HashSet,
@@ -167,7 +169,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let keep_going = Arc::new(AtomicBool::new(true));
     let mut tasks = Vec::new();
 
-    let cached_procmaps = Arc::new(Mutex::new(HashMap::new()));
+    let cached_procmaps = Arc::new(Mutex::new(HashMap::<u32, Weak<ProcMap>>::new()));
 
     let observed_stacktraces = Arc::new(RwLock::new(HashSet::new()));
 
@@ -209,7 +211,20 @@ async fn main() -> Result<(), anyhow::Error> {
                         let procmap = {
                             if let Ok(procmap) = ProcMap::new(pid as pid_t).map(Arc::new) {
                                 let mut cached_procmaps = cached_procmaps.lock().await;
-                                cached_procmaps.insert(pid, Arc::downgrade(&procmap));
+                                let procmap = match cached_procmaps.entry(pid) {
+                                    Entry::Occupied(mut existing) => {
+                                        if let Some(upgraded) = existing.get().upgrade() {
+                                            upgraded
+                                        } else {
+                                            existing.insert(Arc::downgrade(&procmap));
+                                            procmap
+                                        }
+                                    },
+                                    Entry::Vacant(vacancy) => {
+                                        vacancy.insert(Arc::downgrade(&procmap));
+                                        procmap
+                                    }
+                                };
                                 Some(procmap)
                             } else {
                                 let cached_procmaps = cached_procmaps.lock().await;
