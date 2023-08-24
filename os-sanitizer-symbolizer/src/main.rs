@@ -147,53 +147,51 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut transformed = Vec::new();
 
     for path in observed_paths {
-        if !path.starts_with("/home") {
-            if let Ok(resolver) = FileOffsetResolver::new(&manager, path).await {
-                for &(i, prefix, actual, _, offset) in requiring_transform
-                    .iter()
-                    .filter(|(_, _, _, entry_path, _)| *entry_path == path)
+        if let Ok(resolver) = FileOffsetResolver::new(&manager, path).await {
+            for &(i, prefix, actual, _, offset) in requiring_transform
+                .iter()
+                .filter(|(_, _, _, entry_path, _)| *entry_path == path)
+            {
+                if let Some(frames) = resolver
+                    .resolve_symbol(&manager, offset)
+                    .await
+                    .and_then(|frames| (!frames.is_empty()).then_some(frames))
                 {
-                    if let Some(frames) = resolver
-                        .resolve_symbol(&manager, offset)
-                        .await
-                        .and_then(|frames| (!frames.is_empty()).then_some(frames))
-                    {
-                        for (inline, frame) in frames.into_iter().rev().enumerate().rev() {
-                            let mut completed = Vec::from(prefix);
-                            if inline != 0 {
-                                write!(&mut completed, "inlined ")?;
-                            }
-
-                            if let Some(f) = frame.function.as_ref() {
-                                write!(&mut completed, "in {f}")?;
-                            } else {
-                                write!(&mut completed, " ({path}+0x{offset:x})")?;
-                            }
-                            match &frame {
-                                FrameDebugInfo {
-                                    file_path: Some(file_path),
-                                    line_number: Some(line_number),
-                                    ..
-                                } => write!(
-                                    &mut completed,
-                                    " {}:{line_number}",
-                                    file_path.display_path()
-                                )?,
-                                FrameDebugInfo {
-                                    file_path: Some(file_path),
-                                    ..
-                                } => write!(&mut completed, " {}", file_path.display_path())?,
-                                _ => {}
-                            };
-
-                            transformed.push((i, Cow::from(completed)))
+                    for (inline, frame) in frames.into_iter().rev().enumerate().rev() {
+                        let mut completed = Vec::from(prefix);
+                        if inline != 0 {
+                            write!(&mut completed, "inlined ")?;
                         }
-                    } else {
-                        transformed.push((i, Cow::Borrowed(actual)));
+
+                        if let Some(f) = frame.function.as_ref() {
+                            write!(&mut completed, "in {f}")?;
+                        } else {
+                            write!(&mut completed, " ({path}+0x{offset:x})")?;
+                        }
+                        match &frame {
+                            FrameDebugInfo {
+                                file_path: Some(file_path),
+                                line_number: Some(line_number),
+                                ..
+                            } => write!(
+                                &mut completed,
+                                " {}:{line_number}",
+                                file_path.display_path()
+                            )?,
+                            FrameDebugInfo {
+                                file_path: Some(file_path),
+                                ..
+                            } => write!(&mut completed, " {}", file_path.display_path())?,
+                            _ => {}
+                        };
+
+                        transformed.push((i, Cow::from(completed)))
                     }
+                } else {
+                    transformed.push((i, Cow::Borrowed(actual)));
                 }
-                continue;
             }
+            continue;
         }
         for &(i, _, actual, _, _) in requiring_transform
             .iter()
