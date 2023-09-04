@@ -21,16 +21,14 @@ use std::collections::hash_map::Entry;
 use std::sync::Weak;
 use std::time::Duration;
 use std::{
-    collections::HashSet,
     ffi::{c_char, CStr},
     process::exit,
-    str::FromStr,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
 };
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tokio::{signal, task};
 
@@ -132,13 +130,6 @@ struct Args {
     #[arg(
         long,
         short,
-        help = "Stack deduplication depth, or 0 to deduplicate over the full stack.",
-        default_value = "3"
-    )]
-    dedup_depth: usize,
-    #[arg(
-        long,
-        short,
         help = "Stack depth shown, or 0 to show the full stack.",
         default_value = "7"
     )]
@@ -156,11 +147,6 @@ async fn main() -> Result<(), anyhow::Error> {
         exit(1);
     }
 
-    let dedup_depth = if args.dedup_depth == 0 {
-        usize::MAX
-    } else {
-        args.dedup_depth
-    };
     let visibility_depth = if args.visibility_depth == 0 {
         usize::MAX
     } else {
@@ -213,13 +199,10 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let cached_procmaps = Arc::new(Mutex::new(HashMap::<u32, Weak<ProcMap>>::new()));
 
-    let observed_stacktraces = Arc::new(RwLock::new(HashSet::new()));
-
     for cpu_id in online_cpus()? {
         let mut buf = reports.open(cpu_id, None)?;
         {
             let stacktraces = stacktraces.clone();
-            let observed_stacktraces = observed_stacktraces.clone();
             let cached_procmaps = cached_procmaps.clone();
             let keep_going = keep_going.clone();
             tasks.push(task::spawn(async move {
@@ -393,24 +376,8 @@ async fn main() -> Result<(), anyhow::Error> {
                             })
                             .collect::<Vec<_>>();
 
-                        let deduplication_sequence = stacktrace
-                            .iter()
-                            .cloned()
-                            .take_while(|s| {
-                                s.split_once(':')
-                                    .and_then(|(i, _)| usize::from_str(i).ok())
-                                    .map_or(true, |i| i < dedup_depth)
-                            })
-                            .collect::<Vec<_>>();
-
-                        let rlock = observed_stacktraces.read().await;
-                        if !rlock.contains(&deduplication_sequence) {
-                            let stacktrace = stacktrace.join("\n");
-                            log!(level, "{message}; stacktrace:\n{stacktrace}");
-                            drop(rlock);
-                            let mut wlock = observed_stacktraces.write().await;
-                            wlock.insert(deduplication_sequence);
-                        }
+                        let stacktrace = stacktrace.join("\n");
+                        log!(level, "{message}; stacktrace:\n{stacktrace}");
 
                         // send the procmap N seconds into the future to prevent it from being removed from the weak cache
                         if let Some(procmap) = procmap {

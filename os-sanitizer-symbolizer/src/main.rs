@@ -85,8 +85,6 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     }
 
-    let manager = SymbolManager::with_config(config);
-
     let re = RegexBuilder::new(r"^(.+?) \((\/.*)\+0x([0-9a-f]+)\)\s*(?:\(BuildId:.+)?$")
         .multi_line(true)
         .build()
@@ -147,6 +145,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut transformed = Vec::new();
 
     for path in observed_paths {
+        let manager = SymbolManager::with_config(config.clone());
         if let Ok(resolver) = FileOffsetResolver::new(&manager, path).await {
             for &(i, prefix, actual, _, offset) in requiring_transform
                 .iter()
@@ -191,6 +190,7 @@ async fn main() -> Result<(), anyhow::Error> {
                     transformed.push((i, Cow::Borrowed(actual)));
                 }
             }
+            drop(resolver);
             continue;
         }
         for &(i, _, actual, _, _) in requiring_transform
