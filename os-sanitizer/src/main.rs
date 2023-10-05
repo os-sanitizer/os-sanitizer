@@ -280,7 +280,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
                         let (message, level) = match report {
                             OsSanitizerReport::Sprintf { dest, .. } => {
-                                (format!("{context} invoked sprintf with stack dest pointer with a length check (dest: 0x{dest:x})"), Level::Warn)
+                                (format!("{context} invoked sprintf with stack dest pointer (dest: 0x{dest:x})"), Level::Warn)
                             }
                             OsSanitizerReport::Strcpy { len_checked: true, dest, src, .. } => {
                                 (format!("{context} invoked strcpy with stack dest pointer with a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Info)
