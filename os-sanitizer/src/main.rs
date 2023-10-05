@@ -39,7 +39,7 @@ macro_rules! attach_fentry {
         #[allow(unused_imports)]
         use ::std::io::Write as _;
 
-        print!("loading {}...", $name);
+        print!("loading {} (fentry)...", $name);
         let _ = std::io::stdout().lock().flush();
         let program: &mut FEntry = $bpf
             .program_mut(concat!("fentry_", $name))
@@ -51,53 +51,55 @@ macro_rules! attach_fentry {
     };
 }
 
-macro_rules! attach_uprobe {
-    ($bpf: expr, $name: literal, $function: literal, $library: literal) => {
+macro_rules! attach_many_uprobe_uretprobe {
+    ($program: ident, $name: literal, $variant: literal, [$library: literal, $function: literal]) => {
         #[allow(unused_imports)]
         use ::std::io::Write as _;
 
-        print!("loading {}...", $name);
+        print!("attaching {} to {}:{} ({})...", $name, $library, $function, $variant);
+        $program.attach(Some($function), 0, $library, None)?;
+        println!("done")
+    };
+
+    ($program: ident, $name: literal, $variant: literal, [$library: literal, $function: literal], $([$libraries: literal, $functions: literal]),+) => {
+        #[allow(unused_imports)]
+        use ::std::io::Write as _;
+
+        print!("attaching {} to {}:{} ({})...", $name, $library, $function, $variant);
         let _ = std::io::stdout().lock().flush();
+        $program.attach(Some($function), 0, $library, None)?;
+        println!("done");
+        attach_many_uprobe_uretprobe!($program, $name, $variant, $([$libraries, $functions]),+)
+    };
+}
+
+macro_rules! attach_uprobe {
+    ($bpf: expr, $name: literal, $([$libraries: literal, $functions: literal]),+) => {
         let program: &mut ::aya::programs::UProbe = $bpf
             .program_mut(concat!("uprobe_", $name))
             .unwrap()
             .try_into()?;
         program.load()?;
-        program.attach(Some($function), 0, $library, None)?;
-        println!("done");
+        attach_many_uprobe_uretprobe!(program, $name, "uprobe", $([$libraries, $functions]),+);
     };
 
-    ($bpf: expr, $name: literal, $function: literal) => {
-        attach_uprobe!($bpf, $name, $function, "libc")
-    };
-
-    ($bpf: expr, $name: literal) => {
-        attach_uprobe!($bpf, $name, $name, "libc")
+    ($bpf: expr, $name: literal, $library: literal) => {
+        attach_uprobe!($bpf, $name, [$library, $name])
     };
 }
 
 macro_rules! attach_uretprobe {
-    ($bpf: expr, $name: literal, $function: literal, $library: literal) => {
-        #[allow(unused_imports)]
-        use ::std::io::Write as _;
-
-        print!("loading {}...", $name);
-        let _ = std::io::stdout().lock().flush();
+    ($bpf: expr, $name: literal, $([$libraries: literal, $functions: literal]),+) => {
         let program: &mut ::aya::programs::UProbe = $bpf
             .program_mut(concat!("uretprobe_", $name))
             .unwrap()
             .try_into()?;
         program.load()?;
-        program.attach(Some($function), 0, $library, None)?;
-        println!("done");
+        attach_many_uprobe_uretprobe!(program, $name, "uretprobe", $([$libraries, $functions]),+);
     };
 
-    ($bpf: expr, $name: literal, $function: literal) => {
-        attach_uretprobe!($bpf, $name, $function, "libc")
-    };
-
-    ($bpf: expr, $name: literal) => {
-        attach_uretprobe!($bpf, $name, $name, "libc")
+    ($bpf: expr, $name: literal, $library: literal) => {
+        attach_uretprobe!($bpf, $name, [$library, $name])
     };
 }
 
@@ -126,6 +128,8 @@ struct Args {
         help = "Log violations related to the use of `strncpy' (expensive)"
     )]
     strncpy: bool,
+    #[arg(long, help = "Log violations related to the use of `strcpy'")]
+    strcpy: bool,
 
     #[arg(
         long,
@@ -141,7 +145,13 @@ async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
     let args = Args::parse();
 
-    if !(args.access || args.gets || args.memcpy || args.security_file_open || args.strncpy) {
+    if !(args.access
+        || args.gets
+        || args.memcpy
+        || args.security_file_open
+        || args.strncpy
+        || args.strcpy)
+    {
         eprintln!("You must specify one of the modes.");
         <Args as CommandFactory>::command().print_help()?;
         exit(1);
@@ -216,7 +226,8 @@ async fn main() -> Result<(), anyhow::Error> {
                         let report = unsafe { (buf.as_ptr() as *const OsSanitizerReport).read_unaligned() };
 
                         let (executable, pid, tgid, stacktrace) = match report {
-                            OsSanitizerReport::Strncpy { executable, pid_tgid, stack_id, .. }
+                            OsSanitizerReport::Strcpy { executable, pid_tgid, stack_id, .. }
+                              | OsSanitizerReport::Strncpy { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Memcpy { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Open { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Access { executable, pid_tgid, stack_id, .. }
@@ -264,6 +275,12 @@ async fn main() -> Result<(), anyhow::Error> {
                         };
 
                         let (message, level) = match report {
+                            OsSanitizerReport::Strcpy { len_checked: true, dest, src, .. } => {
+                                (format!("{context} invoked strcpy with stack dest pointer with a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Info)
+                            }
+                            OsSanitizerReport::Strcpy { len_checked: false, dest, src, .. } => {
+                                (format!("{context} invoked strcpy with stack dest pointer without a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Warn)
+                            }
                             OsSanitizerReport::Strncpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
                                 (format!("{context} invoked strncpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info)
                             }
@@ -404,25 +421,33 @@ async fn main() -> Result<(), anyhow::Error> {
         attach_fentry!(bpf, btf, "security_file_open");
     }
 
-    if args.memcpy || args.strncpy {
-        attach_uprobe!(bpf, "malloc", "__libc_malloc");
-        attach_uretprobe!(bpf, "malloc", "__libc_malloc");
+    if args.memcpy || args.strncpy || args.strcpy {
+        attach_uprobe!(bpf, "strlen", ["libc", "__strlen_avx2"]);
+        attach_uretprobe!(bpf, "strlen", ["libc", "__strlen_avx2"]);
+    }
 
-        attach_uprobe!(bpf, "realloc", "__libc_realloc");
-        attach_uretprobe!(bpf, "realloc", "__libc_realloc");
-
-        attach_uprobe!(bpf, "free", "__libc_free");
-
-        attach_uprobe!(bpf, "strlen", "__strlen_avx2");
-        attach_uretprobe!(bpf, "strlen", "__strlen_avx2");
+    if args.strcpy {
+        attach_uprobe!(
+            bpf,
+            "strcpy_safe_wrapper",
+            ["libc", "inet_ntop"],
+            ["libc", "realpath"]
+        );
+        attach_uretprobe!(
+            bpf,
+            "strcpy_safe_wrapper",
+            ["libc", "inet_ntop"],
+            ["libc", "realpath"]
+        );
+        attach_uprobe!(bpf, "strcpy", ["libc", "__strcpy_avx2"]);
     }
 
     if args.strncpy {
-        attach_uprobe!(bpf, "strncpy", "__strncpy_avx2");
+        attach_uprobe!(bpf, "strncpy", ["libc", "__strncpy_avx2"]);
     }
 
     if args.memcpy {
-        attach_uprobe!(bpf, "memcpy", "__memcpy_avx_unaligned_erms");
+        attach_uprobe!(bpf, "memcpy", ["libc", "__memcpy_avx_unaligned_erms"]);
     }
 
     if args.access {
@@ -430,11 +455,11 @@ async fn main() -> Result<(), anyhow::Error> {
         attach_fentry!(bpf, btf, "vfs_fstatat");
         attach_fentry!(bpf, btf, "do_statx");
         attach_fentry!(bpf, btf, "do_sys_openat2");
-        attach_uprobe!(bpf, "access");
+        attach_uprobe!(bpf, "access", "libc");
     }
 
     if args.gets {
-        attach_uprobe!(bpf, "gets");
+        attach_uprobe!(bpf, "gets", "libc");
     }
 
     signal::ctrl_c().await?;

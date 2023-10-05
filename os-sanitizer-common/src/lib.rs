@@ -58,6 +58,14 @@ pub enum CopyViolation {
 #[derive(Copy, Clone)]
 #[repr(u64, align(8))]
 pub enum OsSanitizerReport {
+    Strcpy {
+        executable: [u8; EXECUTABLE_LEN],
+        pid_tgid: u64,
+        stack_id: u64,
+        dest: uintptr_t,
+        src: uintptr_t,
+        len_checked: bool,
+    },
     Strncpy {
         executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,
