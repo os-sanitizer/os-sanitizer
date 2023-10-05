@@ -130,6 +130,8 @@ struct Args {
     strncpy: bool,
     #[arg(long, help = "Log violations related to the use of `strcpy'")]
     strcpy: bool,
+    #[arg(long, help = "Log violations related to the use of `sprintf'")]
+    sprintf: bool,
 
     #[arg(
         long,
@@ -150,7 +152,8 @@ async fn main() -> Result<(), anyhow::Error> {
         || args.memcpy
         || args.security_file_open
         || args.strncpy
-        || args.strcpy)
+        || args.strcpy
+        || args.sprintf)
     {
         eprintln!("You must specify one of the modes.");
         <Args as CommandFactory>::command().print_help()?;
@@ -226,7 +229,8 @@ async fn main() -> Result<(), anyhow::Error> {
                         let report = unsafe { (buf.as_ptr() as *const OsSanitizerReport).read_unaligned() };
 
                         let (executable, pid, tgid, stacktrace) = match report {
-                            OsSanitizerReport::Strcpy { executable, pid_tgid, stack_id, .. }
+                            OsSanitizerReport::Sprintf { executable, pid_tgid, stack_id, .. }
+                              | OsSanitizerReport::Strcpy { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Strncpy { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Memcpy { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Open { executable, pid_tgid, stack_id, .. }
@@ -275,6 +279,9 @@ async fn main() -> Result<(), anyhow::Error> {
                         };
 
                         let (message, level) = match report {
+                            OsSanitizerReport::Sprintf { dest, .. } => {
+                                (format!("{context} invoked sprintf with stack dest pointer with a length check (dest: 0x{dest:x})"), Level::Warn)
+                            }
                             OsSanitizerReport::Strcpy { len_checked: true, dest, src, .. } => {
                                 (format!("{context} invoked strcpy with stack dest pointer with a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Info)
                             }
@@ -440,6 +447,12 @@ async fn main() -> Result<(), anyhow::Error> {
             ["libc", "realpath"]
         );
         attach_uprobe!(bpf, "strcpy", ["libc", "__strcpy_avx2"]);
+    }
+
+    if args.sprintf {
+        attach_uprobe!(bpf, "sprintf_safe_wrapper", ["libc", "inet_ntop"]);
+        attach_uretprobe!(bpf, "sprintf_safe_wrapper", ["libc", "inet_ntop"]);
+        attach_uprobe!(bpf, "sprintf", "libc");
     }
 
     if args.strncpy {
