@@ -250,23 +250,12 @@ async fn main() -> Result<(), anyhow::Error> {
 
                         let procmap = {
                             if let Ok(procmap) = ProcMap::new(pid as pid_t).map(Arc::new) {
+                                // update!
                                 let mut cached_procmaps = cached_procmaps.lock().await;
-                                let procmap = match cached_procmaps.entry(pid) {
-                                    Entry::Occupied(mut existing) => {
-                                        if let Some(upgraded) = existing.get().upgrade() {
-                                            upgraded
-                                        } else {
-                                            existing.insert(Arc::downgrade(&procmap));
-                                            procmap
-                                        }
-                                    },
-                                    Entry::Vacant(vacancy) => {
-                                        vacancy.insert(Arc::downgrade(&procmap));
-                                        procmap
-                                    }
-                                };
+                                let _ = cached_procmaps.insert(pid, Arc::downgrade(&procmap));
                                 Some(procmap)
                             } else {
+                                // use the last available
                                 let cached_procmaps = cached_procmaps.lock().await;
                                 cached_procmaps.get(&pid).and_then(|weak| weak.upgrade())
                             }
@@ -412,7 +401,12 @@ async fn main() -> Result<(), anyhow::Error> {
                                 drop(procmap);
                                 if weakened.upgrade().is_none() {
                                     let mut cached_procmaps = cached_procmaps.lock().await;
-                                    let _ = cached_procmaps.remove(&pid);
+                                    if let Entry::Occupied(e) = cached_procmaps.entry(pid) {
+                                        if e.get().upgrade().is_none() {
+                                            // remove if expired
+                                            let _ = e.remove();
+                                        }
+                                    }
                                 }
                             });
                         }
