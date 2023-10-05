@@ -429,8 +429,18 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     if args.memcpy || args.strncpy || args.strcpy {
-        attach_uprobe!(bpf, "strlen", ["libc", "__strlen_avx2"]);
-        attach_uretprobe!(bpf, "strlen", ["libc", "__strlen_avx2"]);
+        attach_uprobe!(
+            bpf,
+            "strlen",
+            ["libc", "__strlen_avx2"],
+            ["libc", "__strnlen_avx2"]
+        );
+        attach_uretprobe!(
+            bpf,
+            "strlen",
+            ["libc", "__strlen_avx2"],
+            ["libc", "__strnlen_avx2"]
+        );
     }
 
     if args.strcpy {
