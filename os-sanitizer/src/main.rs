@@ -17,8 +17,6 @@ use log::{debug, log, warn, Level};
 use os_sanitizer_common::{CopyViolation, OpenViolation, OsSanitizerReport};
 use std::collections::HashMap;
 
-use std::collections::hash_map::Entry;
-use std::sync::Weak;
 use std::time::Duration;
 use std::{
     ffi::{c_char, CStr},
@@ -68,8 +66,11 @@ macro_rules! attach_many_uprobe_uretprobe {
 
         print!("attaching {} to {}:{} ({})...", $name, $library, $function, $variant);
         let _ = std::io::stdout().lock().flush();
-        $program.attach(Some($function), 0, $library, None)?;
-        println!("done");
+        if let Err(e) = $program.attach(Some($function), 0, $library, None) {
+            println!("failed: {e}");
+        } else {
+            println!("done");
+        }
         attach_many_uprobe_uretprobe!($program, $name, $variant, $([$libraries, $functions]),+)
     };
 }
@@ -212,7 +213,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut tasks = Vec::new();
 
     let cached_procmaps = Arc::new(Mutex::new(
-        HashMap::<u32, (Weak<ProcMap>, JoinHandle<()>)>::new(),
+        HashMap::<u32, (Arc<ProcMap>, JoinHandle<()>)>::new(),
     ));
 
     for cpu_id in online_cpus()? {
@@ -255,33 +256,22 @@ async fn main() -> Result<(), anyhow::Error> {
                             if let Ok(procmap) = ProcMap::new(pid as pid_t).map(Arc::new) {
                                 // update!
                                 let mut lock = cached_procmaps.lock().await;
-                                {
-                                    let weakened = Arc::downgrade(&procmap);
-                                    let procmap = procmap.clone();
+                                let handle = {
                                     let cached_procmaps = cached_procmaps.clone();
-                                    let handle = tokio::spawn(async move {
+                                    tokio::spawn(async move {
                                         sleep(Duration::from_secs(PROCMAP_CACHE_TIME)).await;
-                                        let weakened = Arc::downgrade(&procmap);
-                                        drop(procmap);
-                                        if weakened.upgrade().is_none() {
-                                            let mut lock = cached_procmaps.lock().await;
-                                            if let Entry::Occupied(e) = lock.entry(pid) {
-                                                if e.get().0.upgrade().is_none() {
-                                                    // remove if expired
-                                                    let _ = e.remove();
-                                                }
-                                            }
-                                        }
-                                    });
-                                    if let Some((_, old)) = lock.insert(pid, (weakened, handle)) {
-                                        old.abort();
-                                    }
+                                        let mut lock = cached_procmaps.lock().await;
+                                        let _ = lock.remove(&pid);
+                                    })
+                                };
+                                if let Some((_, old)) = lock.insert(pid, (procmap.clone(), handle)) {
+                                    old.abort();
                                 }
                                 Some(procmap)
                             } else {
                                 // use the last available
                                 let lock = cached_procmaps.lock().await;
-                                lock.get(&pid).and_then(|(weak, _)| weak.upgrade())
+                                lock.get(&pid).map(|(existing, _)| existing.clone())
                             }
                         };
 
@@ -357,7 +347,7 @@ async fn main() -> Result<(), anyhow::Error> {
                                         }
                                     }
                                     (OpenViolation::Toctou, Some(variant)) => {
-                                        (format!("{context} opened `{filename}' (a {filetype}) after accessing it via {variant}, a known TOCTOU pattern"), Level::Warn)
+                                        (format!("{context} opened `{filename}' (a {filetype}) after accessing it via {variant}, a known TOCTOU pattern"), Level::Info)
                                     }
                                     _ => unreachable!("Invalid combination of reporting data")
                                 }
@@ -448,21 +438,73 @@ async fn main() -> Result<(), anyhow::Error> {
             "strcpy_safe_wrapper",
             ["libc", "inet_ntop"],
             ["libc", "realpath"],
+            ["libical", "icalrecur_iterator_new"],
             ["libicui18n", "ucol_open_72"],
+            ["libicuuc", "ures_getByIndex_72"],
+            ["libicuuc", "ures_getByKey_72"],
+            ["libicuuc", "ures_getByKeyWithFallback_72"],
+            ["libicuuc", "ures_getNextResource_72"],
+            [
+                "libicuuc",
+                "_ZN6icu_726Locale15setKeywordValueENS_11StringPieceES1_R10UErrorCode"
+            ],
+            [
+                "libicuuc",
+                "_ZN6icu_726Locale15setKeywordValueEPKcS2_R10UErrorCode"
+            ],
+            [
+                "/usr/lib64/security/pam_gnome_keyring.so",
+                "pam_sm_authenticate"
+            ],
+            [
+                "/usr/lib64/security/pam_gnome_keyring.so",
+                "pam_sm_open_session"
+            ],
         );
         attach_uretprobe!(
             bpf,
             "strcpy_safe_wrapper",
             ["libc", "inet_ntop"],
             ["libc", "realpath"],
+            ["libical", "icalrecur_iterator_new"],
             ["libicui18n", "ucol_open_72"],
+            ["libicuuc", "ures_getByIndex_72"],
+            ["libicuuc", "ures_getByKey_72"],
+            ["libicuuc", "ures_getByKeyWithFallback_72"],
+            ["libicuuc", "ures_getNextResource_72"],
+            [
+                "libicuuc",
+                "_ZN6icu_726Locale15setKeywordValueENS_11StringPieceES1_R10UErrorCode"
+            ],
+            [
+                "libicuuc",
+                "_ZN6icu_726Locale15setKeywordValueEPKcS2_R10UErrorCode"
+            ],
+            [
+                "/usr/lib64/security/pam_gnome_keyring.so",
+                "pam_sm_authenticate"
+            ],
+            [
+                "/usr/lib64/security/pam_gnome_keyring.so",
+                "pam_sm_open_session"
+            ],
         );
         attach_uprobe!(bpf, "strcpy", ["libc", "__strcpy_avx2"]);
     }
 
     if args.sprintf {
-        attach_uprobe!(bpf, "sprintf_safe_wrapper", ["libc", "inet_ntop"]);
-        attach_uretprobe!(bpf, "sprintf_safe_wrapper", ["libc", "inet_ntop"]);
+        attach_uprobe!(
+            bpf,
+            "sprintf_safe_wrapper",
+            ["libc", "inet_ntop"],
+            ["libc", "__pthread_setname_np"],
+        );
+        attach_uretprobe!(
+            bpf,
+            "sprintf_safe_wrapper",
+            ["libc", "inet_ntop"],
+            ["libc", "__pthread_setname_np"],
+        );
         attach_uprobe!(bpf, "sprintf", "libc");
     }
 
