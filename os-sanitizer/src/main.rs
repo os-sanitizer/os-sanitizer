@@ -29,6 +29,7 @@ use std::{
     },
 };
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio::{signal, task};
 
@@ -74,7 +75,7 @@ macro_rules! attach_many_uprobe_uretprobe {
 }
 
 macro_rules! attach_uprobe {
-    ($bpf: expr, $name: literal, $([$libraries: literal, $functions: literal]),+) => {
+    ($bpf: expr, $name: literal, $([$libraries: literal, $functions: literal]),+$(,)?) => {
         let program: &mut ::aya::programs::UProbe = $bpf
             .program_mut(concat!("uprobe_", $name))
             .unwrap()
@@ -89,7 +90,7 @@ macro_rules! attach_uprobe {
 }
 
 macro_rules! attach_uretprobe {
-    ($bpf: expr, $name: literal, $([$libraries: literal, $functions: literal]),+) => {
+    ($bpf: expr, $name: literal, $([$libraries: literal, $functions: literal]),+$(,)?) => {
         let program: &mut ::aya::programs::UProbe = $bpf
             .program_mut(concat!("uretprobe_", $name))
             .unwrap()
@@ -210,7 +211,9 @@ async fn main() -> Result<(), anyhow::Error> {
     let keep_going = Arc::new(AtomicBool::new(true));
     let mut tasks = Vec::new();
 
-    let cached_procmaps = Arc::new(Mutex::new(HashMap::<u32, Weak<ProcMap>>::new()));
+    let cached_procmaps = Arc::new(Mutex::new(
+        HashMap::<u32, (Weak<ProcMap>, JoinHandle<()>)>::new(),
+    ));
 
     for cpu_id in online_cpus()? {
         let mut buf = reports.open(cpu_id, None)?;
@@ -251,13 +254,34 @@ async fn main() -> Result<(), anyhow::Error> {
                         let procmap = {
                             if let Ok(procmap) = ProcMap::new(pid as pid_t).map(Arc::new) {
                                 // update!
-                                let mut cached_procmaps = cached_procmaps.lock().await;
-                                let _ = cached_procmaps.insert(pid, Arc::downgrade(&procmap));
+                                let mut lock = cached_procmaps.lock().await;
+                                {
+                                    let weakened = Arc::downgrade(&procmap);
+                                    let procmap = procmap.clone();
+                                    let cached_procmaps = cached_procmaps.clone();
+                                    let handle = tokio::spawn(async move {
+                                        sleep(Duration::from_secs(PROCMAP_CACHE_TIME)).await;
+                                        let weakened = Arc::downgrade(&procmap);
+                                        drop(procmap);
+                                        if weakened.upgrade().is_none() {
+                                            let mut lock = cached_procmaps.lock().await;
+                                            if let Entry::Occupied(e) = lock.entry(pid) {
+                                                if e.get().0.upgrade().is_none() {
+                                                    // remove if expired
+                                                    let _ = e.remove();
+                                                }
+                                            }
+                                        }
+                                    });
+                                    if let Some((_, old)) = lock.insert(pid, (weakened, handle)) {
+                                        old.abort();
+                                    }
+                                }
                                 Some(procmap)
                             } else {
                                 // use the last available
-                                let cached_procmaps = cached_procmaps.lock().await;
-                                cached_procmaps.get(&pid).and_then(|weak| weak.upgrade())
+                                let lock = cached_procmaps.lock().await;
+                                lock.get(&pid).and_then(|(weak, _)| weak.upgrade())
                             }
                         };
 
@@ -391,25 +415,6 @@ async fn main() -> Result<(), anyhow::Error> {
 
                         let stacktrace = stacktrace.join("\n");
                         log!(level, "{message}; stacktrace:\n{stacktrace}");
-
-                        // send the procmap N seconds into the future to prevent it from being removed from the weak cache
-                        if let Some(procmap) = procmap {
-                            let cached_procmaps = cached_procmaps.clone();
-                            tokio::spawn(async move {
-                                sleep(Duration::from_secs(PROCMAP_CACHE_TIME)).await;
-                                let weakened = Arc::downgrade(&procmap);
-                                drop(procmap);
-                                if weakened.upgrade().is_none() {
-                                    let mut cached_procmaps = cached_procmaps.lock().await;
-                                    if let Entry::Occupied(e) = cached_procmaps.entry(pid) {
-                                        if e.get().upgrade().is_none() {
-                                            // remove if expired
-                                            let _ = e.remove();
-                                        }
-                                    }
-                                }
-                            });
-                        }
                     }
                 }
             }));
@@ -442,13 +447,15 @@ async fn main() -> Result<(), anyhow::Error> {
             bpf,
             "strcpy_safe_wrapper",
             ["libc", "inet_ntop"],
-            ["libc", "realpath"]
+            ["libc", "realpath"],
+            ["libicui18n", "ucol_open_72"],
         );
         attach_uretprobe!(
             bpf,
             "strcpy_safe_wrapper",
             ["libc", "inet_ntop"],
-            ["libc", "realpath"]
+            ["libc", "realpath"],
+            ["libicui18n", "ucol_open_72"],
         );
         attach_uprobe!(bpf, "strcpy", ["libc", "__strcpy_avx2"]);
     }
