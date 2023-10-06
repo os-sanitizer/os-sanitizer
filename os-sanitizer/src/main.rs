@@ -17,6 +17,8 @@ use log::{debug, log, warn, Level};
 use os_sanitizer_common::{CopyViolation, OpenViolation, OsSanitizerReport};
 use std::collections::HashMap;
 
+use cpp_demangle::DemangleOptions;
+use once_cell::sync::Lazy;
 use std::time::Duration;
 use std::{
     ffi::{c_char, CStr},
@@ -32,6 +34,7 @@ use tokio::time::sleep;
 use tokio::{signal, task};
 
 const PROCMAP_CACHE_TIME: u64 = 30;
+static DEMANGLE_OPTIONS: Lazy<DemangleOptions> = Lazy::new(DemangleOptions::new);
 
 macro_rules! attach_fentry {
     ($bpf: expr, $btf: expr, $name: literal) => {
@@ -55,7 +58,8 @@ macro_rules! attach_many_uprobe_uretprobe {
         #[allow(unused_imports)]
         use ::std::io::Write as _;
 
-        print!("attaching {} to {}:{} ({})...", $name, $library, $function, $variant);
+        let demangled = ::cpp_demangle::BorrowedSymbol::new($function.as_bytes()).ok().and_then(|mangled| mangled.demangle(&DEMANGLE_OPTIONS).ok()).unwrap_or_else(|| $function.to_string());
+        print!("attaching {} to {}:{} ({})...", $name, $library, demangled, $variant);
         $program.attach(Some($function), 0, $library, None)?;
         println!("done")
     };
@@ -64,7 +68,8 @@ macro_rules! attach_many_uprobe_uretprobe {
         #[allow(unused_imports)]
         use ::std::io::Write as _;
 
-        print!("attaching {} to {}:{} ({})...", $name, $library, $function, $variant);
+        let demangled = ::cpp_demangle::BorrowedSymbol::new($function.as_bytes()).ok().and_then(|mangled| mangled.demangle(&DEMANGLE_OPTIONS).ok()).unwrap_or_else(|| $function.to_string());
+        print!("attaching {} to {}:{} ({})...", $name, $library, demangled, $variant);
         let _ = std::io::stdout().lock().flush();
         if let Err(e) = $program.attach(Some($function), 0, $library, None) {
             println!("failed: {e}");
@@ -443,7 +448,9 @@ async fn main() -> Result<(), anyhow::Error> {
             ["libicuuc", "ures_getByIndex_72"],
             ["libicuuc", "ures_getByKey_72"],
             ["libicuuc", "ures_getByKeyWithFallback_72"],
+            ["libicuuc", "uloc_getDisplayName_72"],
             ["libicuuc", "ures_getNextResource_72"],
+            ["libicuuc", "uloc_getTableStringWithFallback_72"],
             [
                 "libicuuc",
                 "_ZN6icu_726Locale15setKeywordValueENS_11StringPieceES1_R10UErrorCode"
@@ -471,7 +478,9 @@ async fn main() -> Result<(), anyhow::Error> {
             ["libicuuc", "ures_getByIndex_72"],
             ["libicuuc", "ures_getByKey_72"],
             ["libicuuc", "ures_getByKeyWithFallback_72"],
+            ["libicuuc", "uloc_getDisplayName_72"],
             ["libicuuc", "ures_getNextResource_72"],
+            ["libicuuc", "uloc_getTableStringWithFallback_72"],
             [
                 "libicuuc",
                 "_ZN6icu_726Locale15setKeywordValueENS_11StringPieceES1_R10UErrorCode"
