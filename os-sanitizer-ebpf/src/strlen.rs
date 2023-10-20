@@ -1,0 +1,78 @@
+use crate::IGNORED_PIDS;
+use aya_bpf::cty::{size_t, uintptr_t};
+use aya_bpf::helpers::bpf_get_current_pid_tgid;
+use aya_bpf::maps::{HashMap, LruHashMap};
+use aya_bpf::programs::ProbeContext;
+use aya_bpf_macros::{map, uprobe, uretprobe};
+use os_sanitizer_common::OsSanitizerError;
+use os_sanitizer_common::OsSanitizerError::{OutOfSpace, Unreachable};
+
+#[map]
+static STRLEN_PTR_MAP: HashMap<u64, uintptr_t> = HashMap::with_max_entries(1 << 16, 0);
+
+#[map]
+pub(crate) static STRLEN_MAP: LruHashMap<(u64, uintptr_t), size_t> =
+    LruHashMap::with_max_entries(1 << 16, 0);
+
+#[uprobe]
+fn uprobe_strlen(probe: ProbeContext) -> u32 {
+    match unsafe { try_uprobe_strlen(&probe) } {
+        Ok(res) => res,
+        Err(e) => crate::emit_error(&probe, e, "os_sanitizer_strlen_uprobe"),
+    }
+}
+
+#[inline(always)]
+unsafe fn try_uprobe_strlen(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
+    let strptr: uintptr_t = probe
+        .arg(0)
+        .ok_or(Unreachable("strlen didn't have an argument"))?;
+
+    if strptr != 0 {
+        let pid_tgid = bpf_get_current_pid_tgid();
+
+        if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
+            return Ok(0);
+        }
+
+        STRLEN_PTR_MAP
+            .insert(&pid_tgid, &strptr, 0)
+            .map_err(|_| OutOfSpace("strlen map"))?;
+    }
+
+    Ok(0)
+}
+
+#[uretprobe]
+fn uretprobe_strlen(probe: ProbeContext) -> u32 {
+    match unsafe { try_uretprobe_strlen(&probe) } {
+        Ok(res) => res,
+        Err(e) => crate::emit_error(&probe, e, "os_sanitizer_strlen_uretprobe"),
+    }
+}
+
+#[inline(always)]
+unsafe fn try_uretprobe_strlen(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
+    let pid_tgid = bpf_get_current_pid_tgid();
+
+    if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
+        return Ok(0);
+    }
+
+    let srclen: size_t = probe
+        .ret()
+        .ok_or(Unreachable("strlen has a return value"))?;
+
+    let Some(&strptr) = STRLEN_PTR_MAP.get(&pid_tgid) else {
+        return Ok(0);
+    };
+    STRLEN_PTR_MAP
+        .remove(&pid_tgid)
+        .map_err(|_| Unreachable("the value existed, so we must be able to remove it"))?;
+
+    STRLEN_MAP
+        .insert(&(pid_tgid, strptr), &srclen, 0)
+        .map_err(|_| Unreachable("we should always be able to insert"))?;
+
+    Ok(0)
+}

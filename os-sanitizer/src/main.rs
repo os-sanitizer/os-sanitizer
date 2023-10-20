@@ -59,7 +59,7 @@ macro_rules! attach_many_uprobe_uretprobe {
         use ::std::io::Write as _;
 
         let demangled = ::cpp_demangle::BorrowedSymbol::new($function.as_bytes()).ok().and_then(|mangled| mangled.demangle(&DEMANGLE_OPTIONS).ok()).unwrap_or_else(|| $function.to_string());
-        print!("attaching {} to {}:{} ({})...", $name, $library, demangled, $variant);
+        print!("attaching {} {} to {}:{}...", $name, $variant, $library, demangled);
         $program.attach(Some($function), 0, $library, None)?;
         println!("done")
     };
@@ -69,7 +69,7 @@ macro_rules! attach_many_uprobe_uretprobe {
         use ::std::io::Write as _;
 
         let demangled = ::cpp_demangle::BorrowedSymbol::new($function.as_bytes()).ok().and_then(|mangled| mangled.demangle(&DEMANGLE_OPTIONS).ok()).unwrap_or_else(|| $function.to_string());
-        print!("attaching {} to {}:{} ({})...", $name, $library, demangled, $variant);
+        print!("attaching {} {} to {}:{}...", $name, $variant, $library, demangled);
         let _ = std::io::stdout().lock().flush();
         if let Err(e) = $program.attach(Some($function), 0, $library, None) {
             println!("failed: {e}");
@@ -107,6 +107,17 @@ macro_rules! attach_uretprobe {
 
     ($bpf: expr, $name: literal, $library: literal) => {
         attach_uretprobe!($bpf, $name, [$library, $name])
+    };
+}
+
+macro_rules! attach_uprobe_and_uretprobe {
+    ($bpf: expr, $name: literal, $([$libraries: literal, $functions: literal]),+$(,)?) => {
+        attach_uprobe!($bpf, $name, $([$libraries, $functions]),+);
+        attach_uretprobe!($bpf, $name, $([$libraries, $functions]),+);
+    };
+
+    ($bpf: expr, $name: literal, $library: literal) => {
+        attach_uprobe_and_uretprobe!($bpf, $name, [$library, $name])
     };
 }
 
@@ -423,13 +434,7 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     if args.memcpy || args.strncpy || args.strcpy {
-        attach_uprobe!(
-            bpf,
-            "strlen",
-            ["libc", "__strlen_avx2"],
-            ["libc", "__strnlen_avx2"]
-        );
-        attach_uretprobe!(
+        attach_uprobe_and_uretprobe!(
             bpf,
             "strlen",
             ["libc", "__strlen_avx2"],
@@ -438,38 +443,7 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     if args.strcpy {
-        attach_uprobe!(
-            bpf,
-            "strcpy_safe_wrapper",
-            ["libc", "inet_ntop"],
-            ["libc", "realpath"],
-            ["libical", "icalrecur_iterator_new"],
-            ["libicui18n", "ucol_open_72"],
-            ["libicuuc", "ubrk_open_72"],
-            ["libicuuc", "uloc_getDisplayName_72"],
-            ["libicuuc", "uloc_getTableStringWithFallback_72"],
-            ["libicuuc", "ures_getByIndex_72"],
-            ["libicuuc", "ures_getByKey_72"],
-            ["libicuuc", "ures_getByKeyWithFallback_72"],
-            ["libicuuc", "ures_getNextResource_72"],
-            [
-                "libicuuc",
-                "_ZN6icu_726Locale15setKeywordValueENS_11StringPieceES1_R10UErrorCode"
-            ],
-            [
-                "libicuuc",
-                "_ZN6icu_726Locale15setKeywordValueEPKcS2_R10UErrorCode"
-            ],
-            [
-                "/usr/lib64/security/pam_gnome_keyring.so",
-                "pam_sm_authenticate"
-            ],
-            [
-                "/usr/lib64/security/pam_gnome_keyring.so",
-                "pam_sm_open_session"
-            ],
-        );
-        attach_uretprobe!(
+        attach_uprobe_and_uretprobe!(
             bpf,
             "strcpy_safe_wrapper",
             ["libc", "inet_ntop"],
@@ -504,13 +478,7 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     if args.sprintf {
-        attach_uprobe!(
-            bpf,
-            "sprintf_safe_wrapper",
-            ["libc", "inet_ntop"],
-            ["libc", "__pthread_setname_np"],
-        );
-        attach_uretprobe!(
+        attach_uprobe_and_uretprobe!(
             bpf,
             "sprintf_safe_wrapper",
             ["libc", "inet_ntop"],
