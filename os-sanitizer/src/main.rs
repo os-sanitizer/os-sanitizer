@@ -445,12 +445,13 @@ async fn main() -> Result<(), anyhow::Error> {
             ["libc", "realpath"],
             ["libical", "icalrecur_iterator_new"],
             ["libicui18n", "ucol_open_72"],
+            ["libicuuc", "ubrk_open_72"],
+            ["libicuuc", "uloc_getDisplayName_72"],
+            ["libicuuc", "uloc_getTableStringWithFallback_72"],
             ["libicuuc", "ures_getByIndex_72"],
             ["libicuuc", "ures_getByKey_72"],
             ["libicuuc", "ures_getByKeyWithFallback_72"],
-            ["libicuuc", "uloc_getDisplayName_72"],
             ["libicuuc", "ures_getNextResource_72"],
-            ["libicuuc", "uloc_getTableStringWithFallback_72"],
             [
                 "libicuuc",
                 "_ZN6icu_726Locale15setKeywordValueENS_11StringPieceES1_R10UErrorCode"
@@ -475,12 +476,13 @@ async fn main() -> Result<(), anyhow::Error> {
             ["libc", "realpath"],
             ["libical", "icalrecur_iterator_new"],
             ["libicui18n", "ucol_open_72"],
+            ["libicuuc", "ubrk_open_72"],
+            ["libicuuc", "uloc_getDisplayName_72"],
+            ["libicuuc", "uloc_getTableStringWithFallback_72"],
             ["libicuuc", "ures_getByIndex_72"],
             ["libicuuc", "ures_getByKey_72"],
             ["libicuuc", "ures_getByKeyWithFallback_72"],
-            ["libicuuc", "uloc_getDisplayName_72"],
             ["libicuuc", "ures_getNextResource_72"],
-            ["libicuuc", "uloc_getTableStringWithFallback_72"],
             [
                 "libicuuc",
                 "_ZN6icu_726Locale15setKeywordValueENS_11StringPieceES1_R10UErrorCode"
