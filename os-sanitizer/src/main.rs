@@ -429,6 +429,9 @@ async fn main() -> Result<(), anyhow::Error> {
                             })
                             .collect::<Vec<_>>();
 
+                        // since we can't follow these stacktraces, best skip them
+                        let level = if stacktrace.len() <= 2 { Level::Info } else { level };
+
                         let stacktrace = stacktrace.join("\n");
                         log!(level, "{message}; stacktrace:\n{stacktrace}");
                     }
