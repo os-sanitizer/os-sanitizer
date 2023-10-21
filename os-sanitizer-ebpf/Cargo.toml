@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-aya-bpf = { git = "https://github.com/aya-rs/aya" }
-aya-bpf-macros = { git = "https://github.com/aya-rs/aya" }
-aya-log-ebpf = { git = "https://github.com/aya-rs/aya" }
+aya-bpf = { path = "../../../../git/aya/bpf/aya-bpf" }
+aya-bpf-macros = { path = "../../../../git/aya/aya-bpf-macros" }
+aya-log-ebpf = { path = "../../../../git/aya/bpf/aya-log-ebpf" }
 os-sanitizer-common = { path = "../os-sanitizer-common" }
 paste = "1.0"
 
@@ -20,7 +20,7 @@ path = "src/main.rs"
 
 [profile.dev]
 opt-level = 3
-debug = false
+debug = true
 debug-assertions = false
 overflow-checks = false
 lto = true
@@ -31,6 +31,7 @@ rpath = false
 
 [profile.release]
 opt-level = 3
+debug = true
 lto = true
 panic = "abort"
 codegen-units = 1

@@ -150,6 +150,11 @@ struct Args {
     strcpy: bool,
     #[arg(long, help = "Log violations related to the use of `sprintf'")]
     sprintf: bool,
+    #[arg(
+        long,
+        help = "Log violations related to the use of `printf'-like functions with non-constant template parameters"
+    )]
+    printf_mutability: bool,
 
     #[arg(
         long,
@@ -171,7 +176,8 @@ async fn main() -> Result<(), anyhow::Error> {
         || args.security_file_open
         || args.strncpy
         || args.strcpy
-        || args.sprintf)
+        || args.sprintf
+        || args.printf_mutability)
     {
         eprintln!("You must specify one of the modes.");
         <Args as CommandFactory>::command().print_help()?;
@@ -249,7 +255,8 @@ async fn main() -> Result<(), anyhow::Error> {
                         let report = unsafe { (buf.as_ptr() as *const OsSanitizerReport).read_unaligned() };
 
                         let (executable, pid, tgid, stacktrace) = match report {
-                            OsSanitizerReport::Sprintf { executable, pid_tgid, stack_id, .. }
+                            OsSanitizerReport::PrintfMutability { executable, pid_tgid, stack_id, .. }
+                              | OsSanitizerReport::Sprintf { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Strcpy { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Strncpy { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Memcpy { executable, pid_tgid, stack_id, .. }
@@ -298,6 +305,9 @@ async fn main() -> Result<(), anyhow::Error> {
                         };
 
                         let (message, level) = match report {
+                            OsSanitizerReport::PrintfMutability { .. } => {
+                                (format!("{context} invoked a printf-like function with a non-constant template string"), Level::Warn)
+                            }
                             OsSanitizerReport::Sprintf { dest, .. } => {
                                 (format!("{context} invoked sprintf with stack dest pointer (dest: 0x{dest:x})"), Level::Warn)
                             }
@@ -475,6 +485,20 @@ async fn main() -> Result<(), anyhow::Error> {
             ],
         );
         attach_uprobe!(bpf, "strcpy", ["libc", "__strcpy_avx2"]);
+    }
+
+    if args.printf_mutability {
+        attach_uprobe!(bpf, "printf_mutability", ["libc", "printf"]);
+        attach_uprobe!(bpf, "vprintf_mutability", ["libc", "vprintf"]);
+
+        attach_uprobe!(bpf, "fprintf_mutability", ["libc", "fprintf"]);
+        attach_uprobe!(bpf, "dprintf_mutability", ["libc", "dprintf"]);
+        attach_uprobe!(bpf, "sprintf_mutability", ["libc", "sprintf"]);
+        attach_uprobe!(bpf, "snprintf_mutability", ["libc", "snprintf"]);
+        attach_uprobe!(bpf, "vfprintf_mutability", ["libc", "vfprintf"]);
+        attach_uprobe!(bpf, "vdprintf_mutability", ["libc", "vdprintf"]);
+        attach_uprobe!(bpf, "vsprintf_mutability", ["libc", "vsprintf"]);
+        attach_uprobe!(bpf, "vsnprintf_mutability", ["libc", "vsnprintf"]);
     }
 
     if args.sprintf {

@@ -23,9 +23,9 @@ impl FileOffsetResolver {
     async fn new<P: AsRef<Path>>(manager: &SymbolManager, path: P) -> Result<Self, Error> {
         {
             let mut stdout = stdout();
-            stdout.write(b"Applying debuginfo for ").await.unwrap();
+            stdout.write_all(b"Applying debuginfo for ").await.unwrap();
             stdout
-                .write(path.as_ref().as_os_str().as_bytes())
+                .write_all(path.as_ref().as_os_str().as_bytes())
                 .await
                 .unwrap();
             stdout.write_u8(b'\n').await.unwrap();
@@ -216,7 +216,7 @@ async fn main() -> Result<(), anyhow::Error> {
             }
             stdout.write_all(&transformed).await?;
             last_transformed = None;
-            while let Some((h, transformed)) = transformed_iter.next() {
+            for (h, transformed) in transformed_iter.by_ref() {
                 if h == j {
                     stdout.write_u8(b'\n').await?;
                     stdout.write_all(&transformed).await?;

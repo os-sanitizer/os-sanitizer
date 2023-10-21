@@ -11,6 +11,7 @@ mod binding;
 mod do_faccessat;
 mod do_statx;
 mod memcpy;
+mod printf_mutability;
 mod security_file_open;
 mod sprintf;
 mod strcpy;
@@ -118,6 +119,23 @@ fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 
             error!(
                 probe,
                 "Encountered an unreachable code block while handling {}: {}", name, condition
+            );
+        }
+        CouldntFindVma(op, errno, pid, tgid) => {
+            error!(
+                probe,
+                "Failed to find VMA for an address in pid {} (tgid: {}) while handling {}: {} ({})",
+                pid,
+                tgid,
+                name,
+                op,
+                errno
+            );
+        }
+        UnexpectedNull(op) => {
+            error!(
+                probe,
+                "Unexpected null pointer while handling {}: {}", name, op, errno
             );
         }
     }

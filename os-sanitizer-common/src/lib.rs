@@ -18,6 +18,8 @@ pub enum OsSanitizerError {
     InvalidUtf8(&'static str),
     OutOfSpace(&'static str),
     RacefulAccess(&'static str),
+    UnexpectedNull(&'static str),
+    CouldntFindVma(&'static str, i64, u32, u32),
     ImpossibleFile,
     Unreachable(&'static str),
 }
@@ -58,6 +60,11 @@ pub enum CopyViolation {
 #[derive(Copy, Clone)]
 #[repr(u64, align(8))]
 pub enum OsSanitizerReport {
+    PrintfMutability {
+        executable: [u8; EXECUTABLE_LEN],
+        pid_tgid: u64,
+        stack_id: u64,
+    },
     Sprintf {
         executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,

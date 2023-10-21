@@ -6,9 +6,9 @@ edition = "2021"
 publish = false
 
 [dependencies]
-aya = { git = "https://github.com/aya-rs/aya", features = ["async_tokio"] }
-#aya = { path = "../../../../git/aya/aya", features = ["async_tokio"] }
-aya-log = { git = "https://github.com/aya-rs/aya" }
+#aya = { git = "https://github.com/aya-rs/aya", features = ["async_tokio"] }
+aya = { path = "../../../../git/aya/aya", features = ["async_tokio"] }
+aya-log = { path = "../../../../git/aya/aya-log" }
 os-sanitizer-common = { path = "../os-sanitizer-common", features = ["user"] }
 
 anyhow = "1"
