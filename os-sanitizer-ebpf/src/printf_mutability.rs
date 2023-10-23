@@ -2,18 +2,19 @@ use crate::binding::vm_area_struct;
 use crate::{FUNCTION_REPORT_QUEUE, IGNORED_PIDS, STACK_MAP};
 use aya_bpf::bindings::{__u64, task_struct, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_long, c_void};
-use aya_bpf::helpers::gen::bpf_get_current_comm;
+use aya_bpf::helpers::gen::{bpf_get_current_comm, bpf_probe_read_user_str};
 use aya_bpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
 use aya_bpf::programs::ProbeContext;
 use aya_bpf_macros::uprobe;
 use os_sanitizer_common::OsSanitizerError::{
     CouldntFindVma, CouldntGetComm, CouldntRecoverStack, UnexpectedNull, Unreachable,
 };
-use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
+use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN, TEMPLATE_LEN};
 
 #[repr(C)]
 pub struct PrintfMutabilityContext {
     pid_tgid: u64,
+    template_param: __u64,
     probe: *const ProbeContext,
 }
 
@@ -26,6 +27,7 @@ unsafe extern "C" fn printf_mutability_callback(
     unsafe fn do_mutability_check(
         vma: *mut vm_area_struct,
         pid_tgid: u64,
+        template_param: u64,
         probe: &ProbeContext,
     ) -> Result<(), OsSanitizerError> {
         let vm_flags = vma
@@ -52,10 +54,19 @@ unsafe extern "C" fn printf_mutability_callback(
                 return Err(CouldntGetComm("printf-mutability comm", res));
             }
 
+            let mut template = [0u8; TEMPLATE_LEN];
+            bpf_probe_read_user_str(
+                template.as_mut_ptr() as *mut c_void,
+                TEMPLATE_LEN as u32,
+                template_param as _,
+            );
+
             let report = OsSanitizerReport::PrintfMutability {
                 executable,
                 pid_tgid,
                 stack_id,
+                template_param,
+                template,
             };
 
             FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
@@ -66,7 +77,7 @@ unsafe extern "C" fn printf_mutability_callback(
 
     if let Some(ctx) = (callback_ctx as *const PrintfMutabilityContext).as_ref() {
         if let Some(probe) = ctx.probe.as_ref() {
-            if let Err(e) = do_mutability_check(vma, ctx.pid_tgid, probe) {
+            if let Err(e) = do_mutability_check(vma, ctx.pid_tgid, ctx.template_param, probe) {
                 crate::emit_error(probe, e, "printf_mutability_callback");
             }
         }
@@ -85,16 +96,17 @@ unsafe fn check_printf_mutability<const TEMPLATE_PARAM: usize>(
         return Ok(0);
     }
 
-    let ctx = PrintfMutabilityContext {
-        pid_tgid,
-        probe: probe as *const _,
-    };
-
     let task_ptr = bpf_get_current_task_btf();
 
     let template_param: __u64 = probe
         .arg(TEMPLATE_PARAM)
         .ok_or(Unreachable("printf-like has a template parameter"))?;
+
+    let ctx = PrintfMutabilityContext {
+        pid_tgid,
+        template_param,
+        probe: probe as *const _,
+    };
 
     match bpf_find_vma(
         task_ptr,

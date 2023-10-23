@@ -5,6 +5,7 @@ use core::mem::size_of_val;
 
 pub const EXECUTABLE_LEN: usize = 16;
 pub const FILENAME_LEN: usize = 128;
+pub const TEMPLATE_LEN: usize = 128;
 
 #[repr(u32)]
 pub enum OsSanitizerError {
@@ -64,6 +65,8 @@ pub enum OsSanitizerReport {
         executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,
         stack_id: u64,
+        template_param: u64,
+        template: [u8; TEMPLATE_LEN],
     },
     Sprintf {
         executable: [u8; EXECUTABLE_LEN],

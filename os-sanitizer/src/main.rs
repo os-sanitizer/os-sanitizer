@@ -305,8 +305,28 @@ async fn main() -> Result<(), anyhow::Error> {
                         };
 
                         let (message, level) = match report {
-                            OsSanitizerReport::PrintfMutability { .. } => {
-                                (format!("{context} invoked a printf-like function with a non-constant template string"), Level::Warn)
+                            OsSanitizerReport::PrintfMutability { template_param, template, .. } => {
+                                if let Ok(template) = unsafe {
+                                    CStr::from_ptr(template.as_ptr() as *const c_char).to_str()
+                                } {
+                                    // there seems to be a common (but annoying) pattern where vsnprintf is cut up and
+                                    // called with individual format arguments
+                                    // we skip the report if it looks like this is a standalone printf arg or not utf8
+
+                                    // this is not done in ebpf because it causes some weird verifier issue
+
+                                    // reeeeally basic printf specifier check
+                                    if template.starts_with('%')
+                                        && template[1..]
+                                        .chars()
+                                        .all(|c| "ldiuoxXfFeEgGaAcspn%#.*".contains(c))
+                                    {
+                                        continue;
+                                    }
+                                    (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}: {template}"), Level::Warn)
+                                } else {
+                                    (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}, but the template was not string-like"), Level::Warn)
+                                }
                             }
                             OsSanitizerReport::Sprintf { dest, .. } => {
                                 (format!("{context} invoked sprintf with stack dest pointer (dest: 0x{dest:x})"), Level::Warn)
@@ -486,6 +506,9 @@ async fn main() -> Result<(), anyhow::Error> {
                 "/usr/lib64/security/pam_gnome_keyring.so",
                 "pam_sm_open_session"
             ],
+            ["libfontconfig", "FcFreeTypeQueryFace"],
+            ["libfontconfig", "FcFreeTypeQuery"],
+            ["libfontconfig", "FcFreeTypeQueryAll"],
         );
         attach_uprobe!(bpf, "strcpy", ["libc", "__strcpy_avx2"]);
     }

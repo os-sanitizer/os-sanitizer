@@ -13,6 +13,7 @@ mod do_statx;
 mod memcpy;
 mod printf_mutability;
 mod security_file_open;
+mod snprintf;
 mod sprintf;
 mod strcpy;
 mod strlen;
@@ -122,7 +123,8 @@ fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 
             );
         }
         CouldntFindVma(op, errno, pid, tgid) => {
-            error!(
+            // this is noisy
+            info!(
                 probe,
                 "Failed to find VMA for an address in pid {} (tgid: {}) while handling {}: {} ({})",
                 pid,
