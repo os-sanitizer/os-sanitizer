@@ -61,13 +61,13 @@ unsafe extern "C" fn printf_mutability_callback(
                 template_param as _,
             );
 
-            let report = OsSanitizerReport::PrintfMutability {
+            let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::PrintfMutability {
                 executable,
                 pid_tgid,
                 stack_id,
                 template_param,
                 template,
-            };
+            });
 
             FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
         }

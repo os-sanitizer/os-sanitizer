@@ -198,11 +198,11 @@ macro_rules! always_bad_call {
                     return Err(CouldntGetComm(concat!(stringify!($name), " comm"), res));
                 }
 
-                let report = OsSanitizerReport::$variant {
+                let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::$variant {
                     executable,
                     pid_tgid,
                     stack_id,
-                };
+                });
 
                 FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
 

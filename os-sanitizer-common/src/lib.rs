@@ -2,6 +2,7 @@
 
 use aya_bpf_cty::uintptr_t;
 use core::mem::size_of_val;
+use core::mem::MaybeUninit;
 
 pub const EXECUTABLE_LEN: usize = 16;
 pub const FILENAME_LEN: usize = 128;
@@ -137,6 +138,18 @@ pub enum OsSanitizerReport {
         pid_tgid: u64,
         stack_id: u64,
     },
+}
+
+impl OsSanitizerReport {
+    #[inline(always)]
+    pub unsafe fn zeroed_init<F>(f: F) -> Self
+    where
+        F: FnOnce() -> Self,
+    {
+        let mut base = MaybeUninit::zeroed();
+        base.write(f());
+        base.assume_init()
+    }
 }
 
 #[cfg(feature = "user")]

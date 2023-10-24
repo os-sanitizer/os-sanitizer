@@ -76,14 +76,14 @@ unsafe fn try_uprobe_strcpy(probe: &ProbeContext) -> Result<u32, OsSanitizerErro
             return Err(CouldntGetComm("strcpy comm", res));
         }
 
-        let report = OsSanitizerReport::Strcpy {
+        let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::Strcpy {
             executable,
             pid_tgid,
             stack_id,
             dest: destptr,
             src: srcptr,
             len_checked: STRLEN_MAP.get(&(pid_tgid, srcptr)).is_some(),
-        };
+        });
 
         FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
     }

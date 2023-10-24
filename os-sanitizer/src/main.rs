@@ -19,6 +19,7 @@ use std::collections::HashMap;
 
 use cpp_demangle::DemangleOptions;
 use once_cell::sync::Lazy;
+use std::mem::size_of;
 use std::time::Duration;
 use std::{
     ffi::{c_char, CStr},
@@ -256,12 +257,13 @@ async fn main() -> Result<(), anyhow::Error> {
             let keep_going = keep_going.clone();
             tasks.push(task::spawn(async move {
                 let mut buffers = (0..32)
-                    .map(|_| BytesMut::with_capacity(512))
+                    .map(|_| BytesMut::with_capacity(size_of::<OsSanitizerReport>()))
                     .collect::<Vec<_>>();
 
                 while keep_going.load(Ordering::Relaxed) {
                     let events = buf.read_events(&mut buffers).await.unwrap();
                     for buf in buffers.iter_mut().take(events.read) {
+                        println!("{}", hex::encode(&buf));
                         let report = unsafe { (buf.as_ptr() as *const OsSanitizerReport).read_unaligned() };
 
                         let (executable, pid, tgid, stacktrace) = match report {

@@ -160,7 +160,7 @@ unsafe fn try_fentry_vfs_write_snprintf(ctx: &FEntryContext) -> Result<u32, OsSa
                 SnprintfViolation::PossibleLeak
             };
 
-            let report = OsSanitizerReport::Snprintf {
+            let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::Snprintf {
                 executable,
                 pid_tgid,
                 stack_id,
@@ -168,7 +168,7 @@ unsafe fn try_fentry_vfs_write_snprintf(ctx: &FEntryContext) -> Result<u32, OsSa
                 computed,
                 count,
                 kind,
-            };
+            });
 
             FUNCTION_REPORT_QUEUE.output(ctx, &report, 0);
         }

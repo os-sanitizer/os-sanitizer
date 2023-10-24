@@ -73,7 +73,7 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
             .map_err(|e| CouldntRecoverStack("security_file_open", e))?
             as u64;
 
-        let report = OsSanitizerReport::Open {
+        let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::Open {
             executable,
             pid_tgid,
             stack_id,
@@ -81,7 +81,7 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
             filename,
             variant,
             toctou,
-        };
+        });
 
         FUNCTION_REPORT_QUEUE.output(ctx, &report, 0);
     }

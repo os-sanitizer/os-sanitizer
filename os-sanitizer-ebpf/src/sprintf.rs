@@ -72,12 +72,12 @@ unsafe fn try_uprobe_sprintf(probe: &ProbeContext) -> Result<u32, OsSanitizerErr
             return Err(CouldntGetComm("sprintf comm", res));
         }
 
-        let report = OsSanitizerReport::Sprintf {
+        let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::Sprintf {
             executable,
             pid_tgid,
             stack_id,
             dest: destptr,
-        };
+        });
 
         FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
     }

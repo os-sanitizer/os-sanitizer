@@ -53,7 +53,7 @@ unsafe fn try_uprobe_strncpy(probe: &ProbeContext) -> Result<u32, OsSanitizerErr
             return Err(CouldntGetComm("strncpy comm", res));
         }
 
-        let report = OsSanitizerReport::Strncpy {
+        let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::Strncpy {
             executable,
             pid_tgid,
             stack_id,
@@ -62,7 +62,7 @@ unsafe fn try_uprobe_strncpy(probe: &ProbeContext) -> Result<u32, OsSanitizerErr
             dest: destptr,
             src: strptr,
             variant,
-        };
+        });
 
         FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
     }

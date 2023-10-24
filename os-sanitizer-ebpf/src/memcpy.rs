@@ -53,7 +53,7 @@ unsafe fn try_uprobe_memcpy(probe: &ProbeContext) -> Result<u32, OsSanitizerErro
             return Err(CouldntGetComm("memcpy comm", res));
         }
 
-        let report = OsSanitizerReport::Memcpy {
+        let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::Memcpy {
             executable,
             pid_tgid,
             stack_id,
@@ -62,7 +62,7 @@ unsafe fn try_uprobe_memcpy(probe: &ProbeContext) -> Result<u32, OsSanitizerErro
             dest: destptr,
             src: srcptr,
             variant,
-        };
+        });
 
         FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
     }
