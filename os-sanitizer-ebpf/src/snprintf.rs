@@ -1,15 +1,14 @@
 use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
-use aya_bpf::cty::{c_char, c_int, c_long, c_void, size_t, uintptr_t};
-use aya_bpf::helpers::bpf_get_current_pid_tgid;
-use aya_bpf::helpers::gen::{bpf_get_current_comm, bpf_probe_read_user_str};
+use aya_bpf::cty::{c_int, c_void, size_t, uintptr_t};
+use aya_bpf::helpers::gen::bpf_get_current_comm;
+use aya_bpf::helpers::{bpf_get_current_pid_tgid, bpf_probe_read_user_str_bytes};
 use aya_bpf::maps::LruHashMap;
 use aya_bpf::programs::{FEntryContext, ProbeContext};
-use aya_bpf::BpfContext;
 use aya_bpf_macros::{fentry, map, uprobe, uretprobe};
 use aya_log_ebpf::info;
 
 use os_sanitizer_common::OsSanitizerError::{
-    CouldntGetComm, CouldntReadUser, CouldntRecoverStack, InvalidUtf8, MissingArg, Unreachable,
+    CouldntGetComm, CouldntReadUser, CouldntRecoverStack, MissingArg, Unreachable,
 };
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, SnprintfViolation, EXECUTABLE_LEN};
 
@@ -100,7 +99,7 @@ fn fentry_vfs_write_snprintf(ctx: FEntryContext) -> u32 {
 unsafe fn try_fentry_vfs_write_snprintf(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
     // TODO use pointer approximation
 
-    let param1: uintptr_t = ctx.arg(1);
+    let srcptr: uintptr_t = ctx.arg(1);
     let count: size_t = ctx.arg(2);
 
     let pid_tgid = bpf_get_current_pid_tgid();
@@ -112,23 +111,21 @@ unsafe fn try_fentry_vfs_write_snprintf(ctx: &FEntryContext) -> Result<u32, OsSa
     if count == 7 {
         let mut userstring = [0u8; 32];
 
-        let len: c_long = bpf_probe_read_user_str(
-            userstring.as_mut_ptr() as *mut _,
-            userstring.len() as u32,
-            param1 as *const _,
+        let userstring = core::str::from_utf8_unchecked(
+            bpf_probe_read_user_str_bytes(srcptr as *const _, &mut userstring)
+                .map_err(|_| CouldntReadUser("user string for vfs write", srcptr, 0))?,
         );
-        if len < 0 {
-            return Err(CouldntReadUser("user string for vfs write", param1, 0));
-        }
-        let len = len as usize;
 
-        let userstring = core::str::from_utf8(&userstring[..len])
-            .map_err(|_| InvalidUtf8("user string for vfs write"))?;
-
-        info!(ctx, "found {} for {}", userstring, pid_tgid >> 32);
+        info!(
+            ctx,
+            "found {} ({:x}) for {}",
+            userstring,
+            srcptr,
+            pid_tgid >> 32
+        );
     }
 
-    if let Some(&(size, computed)) = SNPRINTF_SIZE_MAP.get(&(pid_tgid >> 32, param1)) {
+    if let Some(&(size, computed)) = SNPRINTF_SIZE_MAP.get(&(pid_tgid >> 32, srcptr)) {
         if count >= computed {
             let mut executable = [0u8; EXECUTABLE_LEN];
 

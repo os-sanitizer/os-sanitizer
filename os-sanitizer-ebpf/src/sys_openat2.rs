@@ -3,6 +3,7 @@ use aya_bpf::cty::uintptr_t;
 use aya_bpf::helpers::bpf_get_current_pid_tgid;
 use aya_bpf::programs::FEntryContext;
 use aya_bpf_macros::fentry;
+use aya_log_ebpf::info;
 use core::ffi::c_int;
 use os_sanitizer_common::OsSanitizerError;
 use os_sanitizer_common::OsSanitizerError::Unreachable;
@@ -24,6 +25,8 @@ unsafe fn try_fentry_do_sys_openat2(ctx: &FEntryContext) -> Result<u32, OsSaniti
 
     let dfd: c_int = ctx.arg(0);
     let usermode_ptr: uintptr_t = ctx.arg(1);
+
+    info!(ctx, "{:x}", usermode_ptr);
 
     if let Some(&variant) = ACCESS_MAP.get(&(pid_tgid, dfd, usermode_ptr)) {
         FLAGGED_FILE_OPEN_PIDS
