@@ -14,7 +14,7 @@ use clap::{CommandFactory, Parser};
 use either::Either;
 use libc::pid_t;
 use log::{debug, log, warn, Level};
-use os_sanitizer_common::{CopyViolation, OpenViolation, OsSanitizerReport};
+use os_sanitizer_common::{CopyViolation, OpenViolation, OsSanitizerReport, SnprintfViolation};
 use std::collections::HashMap;
 
 use cpp_demangle::DemangleOptions;
@@ -37,19 +37,23 @@ const PROCMAP_CACHE_TIME: u64 = 30;
 static DEMANGLE_OPTIONS: Lazy<DemangleOptions> = Lazy::new(DemangleOptions::new);
 
 macro_rules! attach_fentry {
-    ($bpf: expr, $btf: expr, $name: literal) => {
+    ($bpf: expr, $btf: expr, $name: literal, $progname: literal) => {
         #[allow(unused_imports)]
         use ::std::io::Write as _;
 
-        print!("loading {} (fentry)...", $name);
+        print!("loading {} (fentry: {})...", $progname, $name);
         let _ = std::io::stdout().lock().flush();
         let program: &mut FEntry = $bpf
-            .program_mut(concat!("fentry_", $name))
+            .program_mut(concat!("fentry_", $progname))
             .unwrap()
             .try_into()?;
         program.load($name, &$btf)?;
         program.attach()?;
         println!("done");
+    };
+
+    ($bpf: expr, $btf: expr, $name: literal) => {
+        attach_fentry!($bpf, $btf, $name, $name)
     };
 }
 
@@ -152,6 +156,11 @@ struct Args {
     sprintf: bool,
     #[arg(
         long,
+        help = "Log violations related to the use of the return value of `snprintf' to determine a future write"
+    )]
+    snprintf: bool,
+    #[arg(
+        long,
         help = "Log violations related to the use of `printf'-like functions with non-constant template parameters"
     )]
     printf_mutability: bool,
@@ -177,6 +186,7 @@ async fn main() -> Result<(), anyhow::Error> {
         || args.strncpy
         || args.strcpy
         || args.sprintf
+        || args.snprintf
         || args.printf_mutability)
     {
         eprintln!("You must specify one of the modes.");
@@ -256,6 +266,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
                         let (executable, pid, tgid, stacktrace) = match report {
                             OsSanitizerReport::PrintfMutability { executable, pid_tgid, stack_id, .. }
+                              | OsSanitizerReport::Snprintf { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Sprintf { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Strcpy { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Strncpy { executable, pid_tgid, stack_id, .. }
@@ -327,6 +338,12 @@ async fn main() -> Result<(), anyhow::Error> {
                                 } else {
                                     (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}, but the template was not string-like"), Level::Warn)
                                 }
+                            }
+                            OsSanitizerReport::Snprintf { size, computed, count, kind: SnprintfViolation::PossibleLeak, .. } => {
+                                (format!("{context} invoked a write syscall of an snprintf-constructed string using the computed length from snprintf, which might leak (wrote {count}, computed {computed}, restricted size {size})"), Level::Warn)
+                            }
+                            OsSanitizerReport::Snprintf { size, computed, count, kind: SnprintfViolation::DefiniteLeak, .. } => {
+                                (format!("{context} invoked a write syscall of an snprintf-constructed string using the computed length from snprintf which exceeded the originally specified length  (wrote {count}, computed {computed}, restricted size {size})"), Level::Error)
                             }
                             OsSanitizerReport::Sprintf { dest, .. } => {
                                 (format!("{context} invoked sprintf with stack dest pointer (dest: 0x{dest:x})"), Level::Warn)
@@ -535,6 +552,11 @@ async fn main() -> Result<(), anyhow::Error> {
             ["libc", "__pthread_setname_np"],
         );
         attach_uprobe!(bpf, "sprintf", "libc");
+    }
+
+    if args.snprintf {
+        attach_fentry!(bpf, btf, "vfs_write", "vfs_write_snprintf");
+        attach_uprobe_and_uretprobe!(bpf, "snprintf", ["libc", "snprintf"], ["libc", "vsnprintf"]);
     }
 
     if args.strncpy {
