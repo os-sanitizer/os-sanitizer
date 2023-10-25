@@ -263,7 +263,6 @@ async fn main() -> Result<(), anyhow::Error> {
                 while keep_going.load(Ordering::Relaxed) {
                     let events = buf.read_events(&mut buffers).await.unwrap();
                     for buf in buffers.iter_mut().take(events.read) {
-                        println!("{}", hex::encode(&buf));
                         let report = unsafe { (buf.as_ptr() as *const OsSanitizerReport).read_unaligned() };
 
                         let (executable, pid, tgid, stacktrace) = match report {
