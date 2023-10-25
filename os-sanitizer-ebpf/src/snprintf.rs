@@ -1,14 +1,14 @@
 use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_int, c_void, size_t, uintptr_t};
+use aya_bpf::helpers::bpf_get_current_pid_tgid;
 use aya_bpf::helpers::gen::bpf_get_current_comm;
-use aya_bpf::helpers::{bpf_get_current_pid_tgid, bpf_probe_read_user_str_bytes};
 use aya_bpf::maps::LruHashMap;
 use aya_bpf::programs::{FEntryContext, ProbeContext};
+use aya_bpf::BpfContext;
 use aya_bpf_macros::{fentry, map, uprobe, uretprobe};
-use aya_log_ebpf::info;
 
 use os_sanitizer_common::OsSanitizerError::{
-    CouldntGetComm, CouldntReadUser, CouldntRecoverStack, MissingArg, Unreachable,
+    CouldntGetComm, CouldntRecoverStack, MissingArg, Unreachable,
 };
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, SnprintfViolation, EXECUTABLE_LEN};
 
@@ -71,15 +71,6 @@ unsafe fn try_uretprobe_snprintf(probe: &ProbeContext) -> Result<u32, OsSanitize
             .ret()
             .ok_or(Unreachable("no return value for snprintf"))?;
 
-        info!(
-            probe,
-            "stashed {:x} ({}/{}) for {}",
-            destptr,
-            computed,
-            size,
-            pid_tgid >> 32
-        );
-
         SNPRINTF_SIZE_MAP
             .insert(&(pid_tgid >> 32, destptr), &(size, computed as size_t), 0)
             .map_err(|_| Unreachable("Couldn't insert into SNPRINTF_SIZE_MAP"))?;
@@ -88,42 +79,14 @@ unsafe fn try_uretprobe_snprintf(probe: &ProbeContext) -> Result<u32, OsSanitize
     Ok(0)
 }
 
-#[fentry(function = "vfs_write")]
-fn fentry_vfs_write_snprintf(ctx: FEntryContext) -> u32 {
-    match unsafe { try_fentry_vfs_write_snprintf(&ctx) } {
-        Ok(res) => res,
-        Err(e) => crate::emit_error(&ctx, e, "os_sanitizer_vfs_write_snprintf_fentry"),
-    }
-}
-
-unsafe fn try_fentry_vfs_write_snprintf(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
+#[inline(always)]
+unsafe fn maybe_report_sprintf<C: BpfContext>(
+    ctx: &C,
+    pid_tgid: u64,
+    srcptr: uintptr_t,
+    count: size_t,
+) -> Result<u32, OsSanitizerError> {
     // TODO use pointer approximation
-
-    let srcptr: uintptr_t = ctx.arg(1);
-    let count: size_t = ctx.arg(2);
-
-    let pid_tgid = bpf_get_current_pid_tgid();
-
-    if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
-        return Ok(0);
-    }
-
-    if count == 7 {
-        let mut userstring = [0u8; 32];
-
-        let userstring = core::str::from_utf8_unchecked(
-            bpf_probe_read_user_str_bytes(srcptr as *const _, &mut userstring)
-                .map_err(|_| CouldntReadUser("user string for vfs write", srcptr, 0))?,
-        );
-
-        info!(
-            ctx,
-            "found {} ({:x}) for {}",
-            userstring,
-            srcptr,
-            pid_tgid >> 32
-        );
-    }
 
     if let Some(&(size, computed)) = SNPRINTF_SIZE_MAP.get(&(pid_tgid >> 32, srcptr)) {
         if count >= computed {
@@ -164,6 +127,7 @@ unsafe fn try_fentry_vfs_write_snprintf(ctx: &FEntryContext) -> Result<u32, OsSa
                 executable,
                 pid_tgid,
                 stack_id,
+                srcptr,
                 size,
                 computed,
                 count,
@@ -175,4 +139,50 @@ unsafe fn try_fentry_vfs_write_snprintf(ctx: &FEntryContext) -> Result<u32, OsSa
     }
 
     Ok(0)
+}
+
+#[fentry(function = "vfs_write")]
+fn fentry_vfs_write_snprintf(ctx: FEntryContext) -> u32 {
+    match unsafe { try_fentry_vfs_write_snprintf(&ctx) } {
+        Ok(res) => res,
+        Err(e) => crate::emit_error(&ctx, e, "os_sanitizer_vfs_write_snprintf_fentry"),
+    }
+}
+
+#[inline(always)]
+unsafe fn try_fentry_vfs_write_snprintf(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
+    let srcptr: uintptr_t = ctx.arg(1);
+    let count: size_t = ctx.arg(2);
+
+    let pid_tgid = bpf_get_current_pid_tgid();
+
+    if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
+        return Ok(0);
+    }
+
+    maybe_report_sprintf(ctx, pid_tgid, srcptr, count)
+}
+
+#[uprobe]
+fn uprobe_xsputn_sprintf(probe: ProbeContext) -> u32 {
+    match unsafe { try_uprobe_xsputn_sprintf(&probe) } {
+        Ok(res) => res,
+        Err(e) => crate::emit_error(&probe, e, "os_sanitizer_xsputn_snprintf_uprobe"),
+    }
+}
+
+#[inline(always)]
+unsafe fn try_uprobe_xsputn_sprintf(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
+    // TODO use pointer approximation
+
+    let srcptr: uintptr_t = probe.arg(1).ok_or(MissingArg("xsputn data pointer", 1))?;
+    let count: size_t = probe.arg(2).ok_or(MissingArg("xsputn count", 2))?;
+
+    let pid_tgid = bpf_get_current_pid_tgid();
+
+    if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
+        return Ok(0);
+    }
+
+    maybe_report_sprintf(probe, pid_tgid, srcptr, count)
 }

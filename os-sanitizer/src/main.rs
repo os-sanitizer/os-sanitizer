@@ -65,8 +65,11 @@ macro_rules! attach_many_uprobe_uretprobe {
 
         let demangled = ::cpp_demangle::BorrowedSymbol::new($function.as_bytes()).ok().and_then(|mangled| mangled.demangle(&DEMANGLE_OPTIONS).ok()).unwrap_or_else(|| $function.to_string());
         print!("attaching {} {} to {}:{}...", $name, $variant, $library, demangled);
-        $program.attach(Some($function), 0, $library, None)?;
-        println!("done")
+        if let Err(e) = $program.attach(Some($function), 0, $library, None) {
+            println!("failed: {e}");
+        } else {
+            println!("done");
+        }
     };
 
     ($program: ident, $name: literal, $variant: literal, [$library: literal, $function: literal], $([$libraries: literal, $functions: literal]),+) => {
@@ -340,11 +343,11 @@ async fn main() -> Result<(), anyhow::Error> {
                                     (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}, but the template was not string-like"), Level::Warn)
                                 }
                             }
-                            OsSanitizerReport::Snprintf { size, computed, count, kind: SnprintfViolation::PossibleLeak, .. } => {
-                                (format!("{context} invoked a write syscall of an snprintf-constructed string using the computed length from snprintf, which might leak (wrote {count}, computed {computed}, restricted size {size})"), Level::Warn)
+                            OsSanitizerReport::Snprintf { srcptr, size, computed, count, kind: SnprintfViolation::PossibleLeak, .. } => {
+                                (format!("{context} invoked a write syscall of an snprintf-constructed string ({srcptr:#x}) using the computed length from snprintf, which might leak (wrote {count}, computed {computed}, restricted size {size})"), Level::Warn)
                             }
-                            OsSanitizerReport::Snprintf { size, computed, count, kind: SnprintfViolation::DefiniteLeak, .. } => {
-                                (format!("{context} invoked a write syscall of an snprintf-constructed string using the computed length from snprintf which exceeded the originally specified length  (wrote {count}, computed {computed}, restricted size {size})"), Level::Error)
+                            OsSanitizerReport::Snprintf { srcptr, size, computed, count, kind: SnprintfViolation::DefiniteLeak, .. } => {
+                                (format!("{context} invoked a write syscall of an snprintf-constructed string ({srcptr:#x}) using the computed length from snprintf which exceeded the originally specified length  (wrote {count}, computed {computed}, restricted size {size})"), Level::Error)
                             }
                             OsSanitizerReport::Sprintf { dest, .. } => {
                                 (format!("{context} invoked sprintf with stack dest pointer (dest: 0x{dest:x})"), Level::Warn)
@@ -557,6 +560,13 @@ async fn main() -> Result<(), anyhow::Error> {
 
     if args.snprintf {
         attach_fentry!(bpf, btf, "vfs_write", "vfs_write_snprintf");
+        attach_uprobe!(
+            bpf,
+            "xsputn_sprintf",
+            ["libc", "_IO_new_file_xsputn"],
+            ["libc", "_IO_default_xsputn"],
+            ["libc", "_IO_old_file_xsputn"],
+        );
         attach_uprobe_and_uretprobe!(bpf, "snprintf", ["libc", "snprintf"], ["libc", "vsnprintf"]);
     }
 

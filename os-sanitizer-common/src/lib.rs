@@ -86,6 +86,7 @@ pub enum OsSanitizerReport {
         executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,
         stack_id: u64,
+        srcptr: uintptr_t,
         size: usize,
         computed: usize,
         count: usize,
