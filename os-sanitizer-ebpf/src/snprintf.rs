@@ -1,16 +1,19 @@
 use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_int, c_void, size_t, uintptr_t};
-use aya_bpf::helpers::bpf_get_current_pid_tgid;
 use aya_bpf::helpers::gen::bpf_get_current_comm;
+use aya_bpf::helpers::{bpf_get_current_pid_tgid, bpf_probe_read_user_buf};
 use aya_bpf::maps::LruHashMap;
 use aya_bpf::programs::{FEntryContext, ProbeContext};
 use aya_bpf::BpfContext;
 use aya_bpf_macros::{fentry, map, uprobe, uretprobe};
+use core::cmp::min;
 
 use os_sanitizer_common::OsSanitizerError::{
-    CouldntGetComm, CouldntRecoverStack, MissingArg, Unreachable,
+    CouldntGetComm, CouldntReadUser, CouldntRecoverStack, MissingArg, Unreachable,
 };
-use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, SnprintfViolation, EXECUTABLE_LEN};
+use os_sanitizer_common::{
+    OsSanitizerError, OsSanitizerReport, SnprintfViolation, EXECUTABLE_LEN, WRITTEN_LEN,
+};
 
 use crate::{FUNCTION_REPORT_QUEUE, IGNORED_PIDS, STACK_MAP};
 
@@ -19,7 +22,7 @@ static SNPRINTF_INTERMEDIARY_MAP: LruHashMap<u64, (uintptr_t, size_t)> =
     LruHashMap::with_max_entries(1 << 16, 0);
 
 #[map]
-static SNPRINTF_SIZE_MAP: LruHashMap<(u64, uintptr_t), (size_t, size_t)> =
+static SNPRINTF_SIZE_MAP: LruHashMap<(u64, uintptr_t), (size_t, size_t, u64)> =
     LruHashMap::with_max_entries(1 << 16, 0);
 
 #[uprobe]
@@ -71,8 +74,17 @@ unsafe fn try_uretprobe_snprintf(probe: &ProbeContext) -> Result<u32, OsSanitize
             .ret()
             .ok_or(Unreachable("no return value for snprintf"))?;
 
+        let stack_id = STACK_MAP
+            .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
+            .map_err(|e| CouldntRecoverStack("printf-mutability", e))?
+            as u64;
+
         SNPRINTF_SIZE_MAP
-            .insert(&(pid_tgid >> 32, destptr), &(size, computed as size_t), 0)
+            .insert(
+                &(pid_tgid >> 32, destptr),
+                &(size, computed as size_t, stack_id),
+                0,
+            )
             .map_err(|_| Unreachable("Couldn't insert into SNPRINTF_SIZE_MAP"))?;
     }
 
@@ -88,7 +100,7 @@ unsafe fn maybe_report_sprintf<C: BpfContext>(
 ) -> Result<u32, OsSanitizerError> {
     // TODO use pointer approximation
 
-    if let Some(&(size, computed)) = SNPRINTF_SIZE_MAP.get(&(pid_tgid >> 32, srcptr)) {
+    if let Some(&(size, computed, stack_id)) = SNPRINTF_SIZE_MAP.get(&(pid_tgid >> 32, srcptr)) {
         if count >= computed {
             let mut executable = [0u8; EXECUTABLE_LEN];
 
@@ -100,11 +112,6 @@ unsafe fn maybe_report_sprintf<C: BpfContext>(
             if res < 0 {
                 return Err(CouldntGetComm("vfs_write_snprintf comm", res));
             }
-
-            let stack_id = STACK_MAP
-                .get_stackid(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-                .map_err(|e| CouldntRecoverStack("printf-mutability", e))?
-                as u64;
 
             let mut executable = [0u8; EXECUTABLE_LEN];
 
@@ -122,6 +129,16 @@ unsafe fn maybe_report_sprintf<C: BpfContext>(
             } else {
                 SnprintfViolation::PossibleLeak
             };
+
+            let mut written = [0; WRITTEN_LEN];
+            let user_read_amount = min(written.len(), count);
+            bpf_probe_read_user_buf(
+                srcptr as *const u8,
+                written
+                    .get_mut(..user_read_amount)
+                    .ok_or(Unreachable("bad length specified"))?,
+            )
+            .map_err(|_| CouldntReadUser("snprintf -> write buf read", srcptr, user_read_amount))?;
 
             let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::Snprintf {
                 executable,
@@ -173,8 +190,6 @@ fn uprobe_xsputn_sprintf(probe: ProbeContext) -> u32 {
 
 #[inline(always)]
 unsafe fn try_uprobe_xsputn_sprintf(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
-    // TODO use pointer approximation
-
     let srcptr: uintptr_t = probe.arg(1).ok_or(MissingArg("xsputn data pointer", 1))?;
     let count: size_t = probe.arg(2).ok_or(MissingArg("xsputn count", 2))?;
 

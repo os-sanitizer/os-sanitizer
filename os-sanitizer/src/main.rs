@@ -343,11 +343,13 @@ async fn main() -> Result<(), anyhow::Error> {
                                     (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}, but the template was not string-like"), Level::Warn)
                                 }
                             }
-                            OsSanitizerReport::Snprintf { srcptr, size, computed, count, kind: SnprintfViolation::PossibleLeak, .. } => {
-                                (format!("{context} invoked a write syscall of an snprintf-constructed string ({srcptr:#x}) using the computed length from snprintf, which might leak (wrote {count}, computed {computed}, restricted size {size})"), Level::Warn)
-                            }
-                            OsSanitizerReport::Snprintf { srcptr, size, computed, count, kind: SnprintfViolation::DefiniteLeak, .. } => {
-                                (format!("{context} invoked a write syscall of an snprintf-constructed string ({srcptr:#x}) using the computed length from snprintf which exceeded the originally specified length  (wrote {count}, computed {computed}, restricted size {size})"), Level::Error)
+                            OsSanitizerReport::Snprintf { srcptr, size, computed, count, kind, .. } => {
+                                let warning_string = if kind == SnprintfViolation::DefiniteLeak {
+                                    "which exceeded the originally specified length"
+                                } else {
+                                    "which might leak"
+                                };
+                                (format!("{context} invoked a write syscall of an snprintf-constructed string ({srcptr:#x}) using the computed length from snprintf, {warning_string} (wrote {count}, computed {computed}, restricted size {size})"), Level::Warn)
                             }
                             OsSanitizerReport::Sprintf { dest, .. } => {
                                 (format!("{context} invoked sprintf with stack dest pointer (dest: 0x{dest:x})"), Level::Warn)

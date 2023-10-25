@@ -5,6 +5,7 @@ use core::mem::size_of_val;
 use core::mem::MaybeUninit;
 
 pub const EXECUTABLE_LEN: usize = 16;
+pub const WRITTEN_LEN: usize = 128;
 pub const FILENAME_LEN: usize = 128;
 pub const TEMPLATE_LEN: usize = 128;
 
@@ -59,7 +60,7 @@ pub enum CopyViolation {
     Malloc,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
 #[repr(u64, align(8))]
 pub enum SnprintfViolation {
     PossibleLeak,
