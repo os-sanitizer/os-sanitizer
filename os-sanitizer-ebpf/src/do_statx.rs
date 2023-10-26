@@ -26,7 +26,7 @@ unsafe fn try_fentry_do_statx(ctx: &FEntryContext) -> Result<u32, OsSanitizerErr
     let usermode_ptr = (*filename_ptr).uptr as uintptr_t;
 
     ACCESS_MAP
-        .insert(&(pid_tgid, dfd, usermode_ptr as uintptr_t), &Statx, 0)
+        .insert(&(pid_tgid, dfd as u64, usermode_ptr as u64), &Statx, 0)
         .map_err(|_| Unreachable("map insertion failure"))?;
 
     Ok(0)

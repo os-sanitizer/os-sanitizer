@@ -23,7 +23,7 @@ unsafe fn try_fentry_do_faccessat(ctx: &FEntryContext) -> Result<u32, OsSanitize
     let usermode_ptr: uintptr_t = ctx.arg(1);
 
     ACCESS_MAP
-        .insert(&(pid_tgid, dfd, usermode_ptr), &Access, 0)
+        .insert(&(pid_tgid, dfd as u64, usermode_ptr as u64), &Access, 0)
         .map_err(|_| Unreachable("map insertion failure"))?;
 
     Ok(0)

@@ -3,6 +3,27 @@
 #![no_std]
 #![no_main]
 
+use core::hint::unreachable_unchecked;
+
+use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
+use aya_bpf::cty::{c_void, size_t, uintptr_t};
+use aya_bpf::helpers::bpf_get_current_pid_tgid;
+use aya_bpf::helpers::gen::bpf_get_current_comm;
+use aya_bpf::macros::map;
+use aya_bpf::macros::uprobe;
+use aya_bpf::maps::{HashMap, LruHashMap, PerfEventArray, StackTrace};
+use aya_bpf::programs::ProbeContext;
+use aya_bpf::BpfContext;
+use aya_log_ebpf::{debug, error, info, warn};
+
+use os_sanitizer_common::CopyViolation::Strlen;
+use os_sanitizer_common::OsSanitizerError::*;
+use os_sanitizer_common::{
+    CopyViolation, OsSanitizerError, OsSanitizerReport, ToctouVariant, EXECUTABLE_LEN,
+};
+
+use crate::strlen::STRLEN_MAP;
+
 #[link_section = "license"]
 pub static LICENSE: [u8; 4] = *b"GPL\0";
 
@@ -20,25 +41,6 @@ mod strlen;
 mod strncpy;
 mod sys_openat2;
 mod vfs_fstatat;
-
-use crate::strlen::STRLEN_MAP;
-use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
-use aya_bpf::cty::{c_void, size_t, uintptr_t};
-use aya_bpf::helpers::bpf_get_current_pid_tgid;
-use aya_bpf::helpers::gen::bpf_get_current_comm;
-use aya_bpf::macros::map;
-use aya_bpf::macros::uprobe;
-use aya_bpf::maps::{HashMap, LruHashMap, PerfEventArray, StackTrace};
-use aya_bpf::programs::ProbeContext;
-use aya_bpf::BpfContext;
-use aya_log_ebpf::{debug, error, info, warn};
-use core::ffi::c_int;
-use core::hint::unreachable_unchecked;
-use os_sanitizer_common::CopyViolation::Strlen;
-use os_sanitizer_common::OsSanitizerError::*;
-use os_sanitizer_common::{
-    CopyViolation, OsSanitizerError, OsSanitizerReport, ToctouVariant, EXECUTABLE_LEN,
-};
 
 #[map(name = "IGNORED_PIDS")]
 pub static IGNORED_PIDS: HashMap<u32, u8> = HashMap::with_max_entries(1 << 12, 0);
@@ -145,7 +147,7 @@ fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 
 }
 
 #[map]
-static ACCESS_MAP: LruHashMap<(u64, c_int, uintptr_t), ToctouVariant> =
+static ACCESS_MAP: LruHashMap<(u64, u64, u64), ToctouVariant> =
     LruHashMap::with_max_entries(1 << 16, 0);
 
 #[inline(always)]

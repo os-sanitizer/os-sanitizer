@@ -25,7 +25,7 @@ unsafe fn try_fentry_do_sys_openat2(ctx: &FEntryContext) -> Result<u32, OsSaniti
     let dfd: c_int = ctx.arg(0);
     let usermode_ptr: uintptr_t = ctx.arg(1);
 
-    if let Some(&variant) = ACCESS_MAP.get(&(pid_tgid, dfd, usermode_ptr)) {
+    if let Some(&variant) = ACCESS_MAP.get(&(pid_tgid, dfd as u64, usermode_ptr as u64)) {
         FLAGGED_FILE_OPEN_PIDS
             .insert(&pid_tgid, &variant, 0)
             .map_err(|_| Unreachable("map insertion failure"))?;
