@@ -92,6 +92,7 @@ pub enum OsSanitizerReport {
         computed: usize,
         count: usize,
         kind: SnprintfViolation,
+        index: usize,
     },
     Strcpy {
         executable: [u8; EXECUTABLE_LEN],

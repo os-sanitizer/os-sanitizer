@@ -18,6 +18,29 @@ use os_sanitizer_common::{
 use crate::{FUNCTION_REPORT_QUEUE, IGNORED_PIDS, STACK_MAP};
 
 #[map]
+static SNPRINTF_SAFE_WRAPPED: LruHashMap<u64, u8> = LruHashMap::with_max_entries(1 << 16, 0);
+
+#[uprobe]
+fn uprobe_snprintf_safe_wrapper(probe: ProbeContext) -> u32 {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    match SNPRINTF_SAFE_WRAPPED.insert(&pid_tgid, &0, 0) {
+        Ok(_) => 0,
+        Err(_) => crate::emit_error(
+            &probe,
+            Unreachable("Couldn't insert into SNPRINTF_SAFE_WRAPPED"),
+            "uprobe_snprintf_safe_wrapper",
+        ),
+    }
+}
+
+#[uretprobe]
+fn uretprobe_snprintf_safe_wrapper(_probe: ProbeContext) -> u32 {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let _ = SNPRINTF_SAFE_WRAPPED.remove(&pid_tgid); // don't care if this fails
+    0
+}
+
+#[map]
 static SNPRINTF_INTERMEDIARY_MAP: LruHashMap<u64, (uintptr_t, size_t)> =
     LruHashMap::with_max_entries(1 << 16, 0);
 
@@ -38,6 +61,10 @@ unsafe fn try_uprobe_snprintf(probe: &ProbeContext) -> Result<u32, OsSanitizerEr
     let pid_tgid = bpf_get_current_pid_tgid();
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
+        return Ok(0);
+    }
+
+    if SNPRINTF_SAFE_WRAPPED.get(&pid_tgid).is_some() {
         return Ok(0);
     }
 
@@ -64,6 +91,10 @@ unsafe fn try_uretprobe_snprintf(probe: &ProbeContext) -> Result<u32, OsSanitize
     let pid_tgid = bpf_get_current_pid_tgid();
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
+        return Ok(0);
+    }
+
+    if SNPRINTF_SAFE_WRAPPED.get(&pid_tgid).is_some() {
         return Ok(0);
     }
 
@@ -140,7 +171,7 @@ unsafe fn maybe_report_sprintf<C: BpfContext>(
             )
             .map_err(|_| CouldntReadUser("snprintf -> write buf read", srcptr, user_read_amount))?;
 
-            let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::Snprintf {
+            let mut report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::Snprintf {
                 executable,
                 pid_tgid,
                 stack_id,
@@ -149,7 +180,23 @@ unsafe fn maybe_report_sprintf<C: BpfContext>(
                 computed,
                 count,
                 kind,
+                index: 1,
             });
+
+            FUNCTION_REPORT_QUEUE.output(ctx, &report, 0);
+
+            let second_stack_id = STACK_MAP
+                .get_stackid(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
+                .map_err(|e| CouldntRecoverStack("printf-mutability", e))?
+                as u64;
+
+            if let OsSanitizerReport::Snprintf {
+                stack_id, index, ..
+            } = &mut report
+            {
+                *stack_id = second_stack_id;
+                *index = 2;
+            }
 
             FUNCTION_REPORT_QUEUE.output(ctx, &report, 0);
         }

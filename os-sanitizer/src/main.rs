@@ -319,7 +319,7 @@ async fn main() -> Result<(), anyhow::Error> {
                             format!("{executable} (pid: {pid}, thread: {tgid})")
                         };
 
-                        let (message, level) = match report {
+                        let (message, level, index) = match report {
                             OsSanitizerReport::PrintfMutability { template_param, template, .. } => {
                                 if let Ok(template) = unsafe {
                                     CStr::from_ptr(template.as_ptr() as *const c_char).to_str()
@@ -338,39 +338,39 @@ async fn main() -> Result<(), anyhow::Error> {
                                     {
                                         continue;
                                     }
-                                    (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}: {template}"), Level::Warn)
+                                    (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}: {template}"), Level::Warn, 0)
                                 } else {
-                                    (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}, but the template was not string-like"), Level::Warn)
+                                    (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}, but the template was not string-like"), Level::Warn, 0)
                                 }
                             }
-                            OsSanitizerReport::Snprintf { srcptr, size, computed, count, kind, .. } => {
+                            OsSanitizerReport::Snprintf { srcptr, size, computed, count, kind, index, .. } => {
                                 let warning_string = if kind == SnprintfViolation::DefiniteLeak {
                                     "which exceeded the originally specified length"
                                 } else {
                                     "which might leak"
                                 };
-                                (format!("{context} invoked a write syscall of an snprintf-constructed string ({srcptr:#x}) using the computed length from snprintf, {warning_string} (wrote {count}, computed {computed}, restricted size {size})"), Level::Warn)
+                                (format!("{context} invoked a write syscall of an snprintf-constructed string ({srcptr:#x}) using the computed length from snprintf, {warning_string} (wrote {count}, computed {computed}, restricted size {size})"), Level::Warn, index)
                             }
                             OsSanitizerReport::Sprintf { dest, .. } => {
-                                (format!("{context} invoked sprintf with stack dest pointer (dest: 0x{dest:x})"), Level::Warn)
+                                (format!("{context} invoked sprintf with stack dest pointer (dest: 0x{dest:x})"), Level::Warn, 0)
                             }
                             OsSanitizerReport::Strcpy { len_checked: true, dest, src, .. } => {
-                                (format!("{context} invoked strcpy with stack dest pointer with a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Info)
+                                (format!("{context} invoked strcpy with stack dest pointer with a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Info, 0)
                             }
                             OsSanitizerReport::Strcpy { len_checked: false, dest, src, .. } => {
-                                (format!("{context} invoked strcpy with stack dest pointer without a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Warn)
+                                (format!("{context} invoked strcpy with stack dest pointer without a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Warn, 0)
                             }
                             OsSanitizerReport::Strncpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
-                                (format!("{context} invoked strncpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info)
+                                (format!("{context} invoked strncpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info, 0)
                             }
                             OsSanitizerReport::Strncpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
-                                (format!("{context} invoked strncpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn)
+                                (format!("{context} invoked strncpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn, 0)
                             }
                             OsSanitizerReport::Memcpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
-                                (format!("{context} invoked memcpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info)
+                                (format!("{context} invoked memcpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info, 0)
                             }
                             OsSanitizerReport::Memcpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
-                                (format!("{context} invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn)
+                                (format!("{context} invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn, 0)
                             }
                             OsSanitizerReport::Open { i_mode, filename, variant, toctou, .. } => {
                                 let Ok(filename) = (unsafe {
@@ -410,22 +410,22 @@ async fn main() -> Result<(), anyhow::Error> {
                                         let rendered = core::str::from_utf8(&rendered).unwrap();
 
                                         if i_mode & 0xF000 == 0x8000 || i_mode & 0xF000 == 0x4000 {
-                                            (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), Level::Warn)
+                                            (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), Level::Warn, 0)
                                         } else {
-                                            (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), Level::Info)
+                                            (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), Level::Info, 0)
                                         }
                                     }
                                     (OpenViolation::Toctou, Some(variant)) => {
-                                        (format!("{context} opened `{filename}' (a {filetype}) after accessing it via {variant}, a known TOCTOU pattern"), Level::Info)
+                                        (format!("{context} opened `{filename}' (a {filetype}) after accessing it via {variant}, a known TOCTOU pattern"), Level::Info, 0)
                                     }
                                     _ => unreachable!("Invalid combination of reporting data")
                                 }
                             }
                             OsSanitizerReport::Access { .. } => {
-                                (format!("{context} invoked access, which is a syscall wrapper explicitly warned against"), Level::Info)
+                                (format!("{context} invoked access, which is a syscall wrapper explicitly warned against"), Level::Info, 0)
                             }
                             OsSanitizerReport::Gets { .. } => {
-                                (format!("{context} invoked gets, which is incredibly stupid"), Level::Error)
+                                (format!("{context} invoked gets, which is incredibly stupid"), Level::Error, 0)
                             }
                         };
 
@@ -476,7 +476,11 @@ async fn main() -> Result<(), anyhow::Error> {
                         let level = if stacktrace.len() <= 2 { Level::Info } else { level };
 
                         let stacktrace = stacktrace.join("\n");
-                        log!(level, "{message}; stacktrace:\n{stacktrace}");
+                        if index == 0 {
+                            log!(level, "{message}; stacktrace:\n{stacktrace}");
+                        } else {
+                            log!(level, "{message}; stacktrace {index}:\n{stacktrace}");
+                        }
                     }
                 }
             }));
@@ -561,6 +565,7 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     if args.snprintf {
+        // write detection
         attach_fentry!(bpf, btf, "vfs_write", "vfs_write_snprintf");
         attach_uprobe!(
             bpf,
@@ -569,6 +574,8 @@ async fn main() -> Result<(), anyhow::Error> {
             ["libc", "_IO_default_xsputn"],
             ["libc", "_IO_old_file_xsputn"],
         );
+
+        // snprintf init
         attach_uprobe_and_uretprobe!(bpf, "snprintf", ["libc", "snprintf"], ["libc", "vsnprintf"]);
     }
 
