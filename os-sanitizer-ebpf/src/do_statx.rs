@@ -23,11 +23,13 @@ unsafe fn try_fentry_do_statx(ctx: &FEntryContext) -> Result<u32, OsSanitizerErr
     let dfd: c_int = ctx.arg(0);
 
     let filename_ptr: *const filename = ctx.arg(1);
-    let usermode_ptr = (*filename_ptr).uptr as uintptr_t;
+    if !filename_ptr.is_null() {
+        let usermode_ptr = (*filename_ptr).uptr as uintptr_t;
 
-    ACCESS_MAP
-        .insert(&(pid_tgid, dfd as u64, usermode_ptr as u64), &Statx, 0)
-        .map_err(|_| Unreachable("map insertion failure"))?;
+        ACCESS_MAP
+            .insert(&(pid_tgid, dfd as u64, usermode_ptr as u64), &Statx, 0)
+            .map_err(|_| Unreachable("map insertion failure"))?;
+    }
 
     Ok(0)
 }
