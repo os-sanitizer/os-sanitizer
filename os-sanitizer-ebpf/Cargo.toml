@@ -11,7 +11,7 @@ os-sanitizer-common = { path = "../os-sanitizer-common" }
 paste = "1.0"
 
 [build-dependencies]
-bindgen = "0.66"
+bindgen = "0.68.1"
 shlex = "1.1"
 
 [[bin]]

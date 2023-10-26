@@ -126,7 +126,7 @@ pub enum OsSanitizerReport {
         executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,
         stack_id: u64,
-        i_mode: u16,
+        i_mode: u64,
         filename: [u8; FILENAME_LEN],
         variant: OpenViolation,
         toctou: Option<ToctouVariant>,

@@ -29,7 +29,7 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
     let data: *const file = ctx.arg(0);
 
     let inode = (*data).f_inode;
-    let i_mode = (*inode).i_mode;
+    let i_mode = (*inode).i_mode as u64;
 
     let (variant, toctou) = if i_mode & 0b010 != 0 && i_mode & 0xF000 != 0xA000 {
         (Perms, None)
