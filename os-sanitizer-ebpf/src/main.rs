@@ -31,6 +31,7 @@ pub static LICENSE: [u8; 4] = *b"GPL\0";
 mod binding;
 mod do_faccessat;
 mod do_statx;
+mod filep_unlocked;
 mod memcpy;
 mod printf_mutability;
 mod security_file_open;

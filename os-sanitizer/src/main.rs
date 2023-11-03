@@ -168,6 +168,11 @@ struct Args {
         help = "Log violations related to the use of `printf'-like functions with non-constant template parameters"
     )]
     printf_mutability: bool,
+    #[arg(
+        long,
+        help = "Log violations of file pointer `_unlocked' functions being used on multiple threads"
+    )]
+    filep_unlocked: bool,
 
     #[arg(
         long,
@@ -191,7 +196,8 @@ async fn main() -> Result<(), anyhow::Error> {
         || args.strcpy
         || args.sprintf
         || args.snprintf
-        || args.printf_mutability)
+        || args.printf_mutability
+        || args.filep_unlocked)
     {
         eprintln!("You must specify one of the modes.");
         <Args as CommandFactory>::command().print_help()?;
@@ -270,6 +276,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
                         let (executable, pid, tgid, stacktrace) = match report {
                             OsSanitizerReport::PrintfMutability { executable, pid_tgid, stack_id, .. }
+                              | OsSanitizerReport::FilePointerLocking { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Snprintf { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Sprintf { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Strcpy { executable, pid_tgid, stack_id, .. }
@@ -342,6 +349,9 @@ async fn main() -> Result<(), anyhow::Error> {
                                 } else {
                                     (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}, but the template was not string-like"), Level::Warn, 0)
                                 }
+                            }
+                            OsSanitizerReport::FilePointerLocking { .. } => {
+                                (format!("{context} invoked a FILE* function with unlocked in another thread from a usage of another FILE* function"), Level::Warn, 0)
                             }
                             OsSanitizerReport::Snprintf { srcptr, size, computed, count, kind, index, .. } => {
                                 let warning_string = if kind == SnprintfViolation::DefiniteLeak {
@@ -585,6 +595,79 @@ async fn main() -> Result<(), anyhow::Error> {
 
     if args.memcpy {
         attach_uprobe!(bpf, "memcpy", ["libc", "__memcpy_avx_unaligned_erms"]);
+    }
+
+    if args.filep_unlocked {
+        attach_uprobe!(
+            bpf,
+            "filep_unlocked_used_arg0",
+            ["libc", "getc_unlocked"],
+            ["libc", "clearerr_unlocked"],
+            ["libc", "feof_unlocked"],
+            ["libc", "ferror_unlocked"],
+            ["libc", "fileno_unlocked"],
+            ["libc", "fflush_unlocked"],
+            ["libc", "fgetc_unlocked"],
+            ["libc", "getwc_unlocked"],
+            ["libc", "fgetwc_unlocked"],
+        );
+        attach_uprobe!(
+            bpf,
+            "filep_unlocked_used_arg1",
+            ["libc", "putc_unlocked"],
+            ["libc", "fputc_unlocked"],
+            ["libc", "fputs_unlocked"],
+            ["libc", "fputwc_unlocked"],
+            ["libc", "putwc_unlocked"],
+            ["libc", "fputws_unlocked"],
+        );
+        attach_uprobe!(
+            bpf,
+            "filep_unlocked_used_arg2",
+            ["libc", "fgets_unlocked"],
+            ["libc", "fgetws_unlocked"],
+        );
+        attach_uprobe!(
+            bpf,
+            "filep_unlocked_used_arg3",
+            ["libc", "fread_unlocked"],
+            ["libc", "fwrite_unlocked"],
+        );
+        attach_uprobe!(
+            bpf,
+            "filep_locked_used_arg0",
+            ["libc", "getc"],
+            ["libc", "clearerr"],
+            ["libc", "feof"],
+            ["libc", "ferror"],
+            ["libc", "fileno"],
+            ["libc", "fflush"],
+            ["libc", "fgetc"],
+            ["libc", "getwc"],
+            ["libc", "fgetwc"],
+        );
+        attach_uprobe!(
+            bpf,
+            "filep_locked_used_arg1",
+            ["libc", "putc"],
+            ["libc", "fputc"],
+            ["libc", "fputs"],
+            ["libc", "fputwc"],
+            ["libc", "putwc"],
+            ["libc", "fputws"],
+        );
+        attach_uprobe!(
+            bpf,
+            "filep_locked_used_arg2",
+            ["libc", "fgets"],
+            ["libc", "fgetws"],
+        );
+        attach_uprobe!(
+            bpf,
+            "filep_locked_used_arg3",
+            ["libc", "fread"],
+            ["libc", "fwrite"],
+        );
     }
 
     if args.access {
