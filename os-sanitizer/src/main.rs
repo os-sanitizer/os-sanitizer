@@ -139,6 +139,8 @@ struct Args {
     access: bool,
     #[arg(long, help = "Log all uses of the `gets' function")]
     gets: bool,
+    #[arg(long, help = "Log all uses of RWX memory")]
+    rwx_mem: bool,
     #[arg(
         long,
         help = "Log violations related to the use of `memcpy' (expensive and false-positive prone)"
@@ -190,6 +192,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     if !(args.access
         || args.gets
+        || args.rwx_mem
         || args.memcpy
         || args.security_file_open
         || args.strncpy
@@ -284,7 +287,8 @@ async fn main() -> Result<(), anyhow::Error> {
                               | OsSanitizerReport::Memcpy { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Open { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Access { executable, pid_tgid, stack_id, .. }
-                              | OsSanitizerReport::Gets { executable, pid_tgid, stack_id, .. } => {
+                              | OsSanitizerReport::Gets { executable, pid_tgid, stack_id, .. }
+                              | OsSanitizerReport::RwxVma { executable, pid_tgid, stack_id, .. } => {
                                 let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
                                     warn!("Couldn't recover the name of an executable.");
                                     continue;
@@ -436,6 +440,9 @@ async fn main() -> Result<(), anyhow::Error> {
                             }
                             OsSanitizerReport::Gets { .. } => {
                                 (format!("{context} invoked gets, which is incredibly stupid"), Level::Error, 0)
+                            }
+                            OsSanitizerReport::RwxVma { start, end, .. } => {
+                                (format!("{context} updated a memory region at {start:#x}-{end:#x} to be simultaneously writable and executable"), Level::Warn, 0)
                             }
                         };
 
@@ -680,6 +687,10 @@ async fn main() -> Result<(), anyhow::Error> {
 
     if args.gets {
         attach_uprobe!(bpf, "gets", "libc");
+    }
+
+    if args.rwx_mem {
+        attach_fentry!(bpf, btf, "vma_set_page_prot");
     }
 
     signal::ctrl_c().await?;

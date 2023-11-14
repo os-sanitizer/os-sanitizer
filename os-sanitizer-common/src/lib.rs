@@ -70,6 +70,13 @@ pub enum SnprintfViolation {
 #[derive(Copy, Clone)]
 #[repr(u64, align(8))]
 pub enum OsSanitizerReport {
+    RwxVma {
+        executable: [u8; EXECUTABLE_LEN],
+        pid_tgid: u64,
+        stack_id: u64,
+        start: u64,
+        end: u64,
+    },
     PrintfMutability {
         executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,

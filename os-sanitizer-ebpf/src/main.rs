@@ -34,6 +34,7 @@ mod do_statx;
 mod filep_unlocked;
 mod memcpy;
 mod printf_mutability;
+mod rwx_mem;
 mod security_file_open;
 mod snprintf;
 mod sprintf;
