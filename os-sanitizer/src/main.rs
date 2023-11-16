@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use cpp_demangle::DemangleOptions;
 use once_cell::sync::Lazy;
 use std::mem::size_of;
+use std::process::Stdio;
 use std::time::Duration;
 use std::{
     ffi::{c_char, CStr},
@@ -29,6 +30,7 @@ use std::{
         Arc,
     },
 };
+use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
@@ -387,6 +389,10 @@ async fn main() -> Result<(), anyhow::Error> {
                                 (format!("{context} invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn, 0)
                             }
                             OsSanitizerReport::Open { i_mode, filename, variant, toctou, .. } => {
+                                if executable == "ls" {
+                                    continue;
+                                }
+
                                 let Ok(filename) = (unsafe {
                                     CStr::from_ptr(filename.as_ptr() as *const c_char).to_str()
                                 }) else {
@@ -424,7 +430,17 @@ async fn main() -> Result<(), anyhow::Error> {
                                         let rendered = core::str::from_utf8(&rendered).unwrap();
 
                                         if i_mode & 0xF000 == 0x8000 || i_mode & 0xF000 == 0x4000 {
-                                            (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), Level::Warn, 0)
+                                            let level = if Command::new("ls")
+                                                .arg(filename)
+                                                .uid(0x1337).gid(0x1337)
+                                                .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+                                                .status().await
+                                                .map_or(false, |v| v.success()) {
+                                                Level::Error
+                                            } else {
+                                                Level::Warn
+                                            };
+                                            (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), level, 0)
                                         } else {
                                             (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), Level::Info, 0)
                                         }
@@ -682,7 +698,7 @@ async fn main() -> Result<(), anyhow::Error> {
         attach_fentry!(bpf, btf, "vfs_fstatat");
         attach_fentry!(bpf, btf, "do_statx");
         attach_fentry!(bpf, btf, "do_sys_openat2");
-        attach_uprobe!(bpf, "access", "libc");
+        // attach_uprobe!(bpf, "access", "libc");
     }
 
     if args.gets {
