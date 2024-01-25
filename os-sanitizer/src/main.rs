@@ -174,6 +174,11 @@ struct Args {
     printf_mutability: bool,
     #[arg(
         long,
+        help = "Log violations related to the use of system with non-constant command parameters"
+    )]
+    system_mutability: bool,
+    #[arg(
+        long,
         help = "Log violations of file pointer `_unlocked' functions being used on multiple threads"
     )]
     filep_unlocked: bool,
@@ -202,6 +207,7 @@ async fn main() -> Result<(), anyhow::Error> {
         || args.sprintf
         || args.snprintf
         || args.printf_mutability
+        || args.system_mutability
         || args.filep_unlocked)
     {
         eprintln!("You must specify one of the modes.");
@@ -281,6 +287,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
                         let (executable, pid, tgid, stacktrace) = match report {
                             OsSanitizerReport::PrintfMutability { executable, pid_tgid, stack_id, .. }
+                              | OsSanitizerReport::SystemMutability { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::FilePointerLocking { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Snprintf { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Sprintf { executable, pid_tgid, stack_id, .. }
@@ -354,6 +361,15 @@ async fn main() -> Result<(), anyhow::Error> {
                                     (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}: {template}"), Level::Warn, 0)
                                 } else {
                                     (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}, but the template was not string-like"), Level::Warn, 0)
+                                }
+                            }
+                            OsSanitizerReport::SystemMutability { command_param, command, .. } => {
+                                if let Ok(command) = unsafe {
+                                    CStr::from_ptr(command.as_ptr() as *const c_char).to_str()
+                                } {
+                                    (format!("{context} invoked system with a non-constant command string located at 0x{command_param:x}: {command}"), Level::Warn, 0)
+                                } else {
+                                    (format!("{context} invoked system with a non-constant template string located at 0x{command_param:x}, but the command was not string-like"), Level::Warn, 0)
                                 }
                             }
                             OsSanitizerReport::FilePointerLocking { .. } => {
@@ -585,6 +601,10 @@ async fn main() -> Result<(), anyhow::Error> {
         attach_uprobe!(bpf, "vdprintf_mutability", ["libc", "vdprintf"]);
         attach_uprobe!(bpf, "vsprintf_mutability", ["libc", "vsprintf"]);
         attach_uprobe!(bpf, "vsnprintf_mutability", ["libc", "vsnprintf"]);
+    }
+
+    if args.system_mutability {
+        attach_uprobe!(bpf, "system_mutability", ["libc", "system"]);
     }
 
     if args.sprintf {

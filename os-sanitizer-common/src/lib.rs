@@ -84,6 +84,13 @@ pub enum OsSanitizerReport {
         template_param: u64,
         template: [u8; TEMPLATE_LEN],
     },
+    SystemMutability {
+        executable: [u8; EXECUTABLE_LEN],
+        pid_tgid: u64,
+        stack_id: u64,
+        command_param: u64,
+        command: [u8; TEMPLATE_LEN],
+    },
     FilePointerLocking {
         executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,
