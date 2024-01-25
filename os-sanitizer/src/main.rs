@@ -179,6 +179,11 @@ struct Args {
     system_mutability: bool,
     #[arg(
         long,
+        help = "Log violations related to the use of system with non-absolute command parameters"
+    )]
+    system_absolute: bool,
+    #[arg(
+        long,
         help = "Log violations of file pointer `_unlocked' functions being used on multiple threads"
     )]
     filep_unlocked: bool,
@@ -208,6 +213,7 @@ async fn main() -> Result<(), anyhow::Error> {
         || args.snprintf
         || args.printf_mutability
         || args.system_mutability
+        || args.system_absolute
         || args.filep_unlocked)
     {
         eprintln!("You must specify one of the modes.");
@@ -288,6 +294,7 @@ async fn main() -> Result<(), anyhow::Error> {
                         let (executable, pid, tgid, stacktrace) = match report {
                             OsSanitizerReport::PrintfMutability { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::SystemMutability { executable, pid_tgid, stack_id, .. }
+                              | OsSanitizerReport::SystemAbsolute { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::FilePointerLocking { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Snprintf { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Sprintf { executable, pid_tgid, stack_id, .. }
@@ -369,7 +376,16 @@ async fn main() -> Result<(), anyhow::Error> {
                                 } {
                                     (format!("{context} invoked system with a non-constant command string located at 0x{command_param:x}: {command}"), Level::Warn, 0)
                                 } else {
-                                    (format!("{context} invoked system with a non-constant template string located at 0x{command_param:x}, but the command was not string-like"), Level::Warn, 0)
+                                    (format!("{context} invoked system with a non-constant command string located at 0x{command_param:x}, but the command was not string-like"), Level::Warn, 0)
+                                }
+                            }
+                            OsSanitizerReport::SystemAbsolute { command_param, command, .. } => {
+                                if let Ok(command) = unsafe {
+                                    CStr::from_ptr(command.as_ptr() as *const c_char).to_str()
+                                } {
+                                    (format!("{context} invoked system with a non-absolute command string located at 0x{command_param:x}: {command}"), Level::Warn, 0)
+                                } else {
+                                    (format!("{context} invoked system with a non-absolute command string located at 0x{command_param:x}, but the command was not string-like"), Level::Warn, 0)
                                 }
                             }
                             OsSanitizerReport::FilePointerLocking { .. } => {
@@ -605,6 +621,10 @@ async fn main() -> Result<(), anyhow::Error> {
 
     if args.system_mutability {
         attach_uprobe!(bpf, "system_mutability", ["libc", "system"]);
+    }
+
+    if args.system_absolute {
+        attach_uprobe!(bpf, "system_absolute", ["libc", "system"]);
     }
 
     if args.sprintf {

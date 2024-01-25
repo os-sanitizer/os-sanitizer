@@ -1,4 +1,5 @@
 #![feature(offset_of)]
+#![feature(byte_slice_trim_ascii)]
 #![no_std]
 #![no_main]
 
@@ -41,6 +42,7 @@ mod strcpy;
 mod strlen;
 mod strncpy;
 mod sys_openat2;
+mod system_absolute;
 mod system_mutability;
 mod vfs_fstatat;
 

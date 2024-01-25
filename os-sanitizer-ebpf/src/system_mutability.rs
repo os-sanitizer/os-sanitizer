@@ -96,19 +96,19 @@ unsafe fn check_system_mutability(probe: &ProbeContext) -> Result<u32, OsSanitiz
 
     let task_ptr = bpf_get_current_task_btf();
 
-    let template_param: __u64 = probe
+    let command_param: __u64 = probe
         .arg(0)
         .ok_or(Unreachable("system-like has a template parameter"))?;
 
     let ctx = SystemMutabilityContext {
         pid_tgid,
-        command_param: template_param,
+        command_param,
         probe: probe as *const _,
     };
 
     match bpf_find_vma(
         task_ptr,
-        template_param,
+        command_param,
         system_mutability_callback as *mut c_void,
         &ctx as *const SystemMutabilityContext as *mut c_void,
         0,
