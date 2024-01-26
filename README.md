@@ -3,6 +3,7 @@
 ## Prerequisites
 
 1. Install bpf-linker: `cargo install bpf-linker`
+2. Install `x86_64-unknown-linux-musl`: `rustup target add x86_64-unknown-linux-musl`
 
 ## Build eBPF
 
