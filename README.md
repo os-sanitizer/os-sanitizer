@@ -30,7 +30,7 @@ RUST_LOG=info cargo xtask run --help
 ```bash
 cargo xtask build-ebpf --release
 cargo build --release
-sudo cp target/release/os-sanitizer /usr/local/sbin/
+sudo cp target/x86_64-unknown-linux-musl/release/os-sanitizer /usr/local/sbin/
 sudo cp os-sanitizer.service /usr/lib/systemd/system/
 sudo systemctl enable os-sanitizer
 sudo service os-sanitizer start

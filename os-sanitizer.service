@@ -7,8 +7,8 @@ Type=simple
 Restart=always
 RestartSec=1
 User=root
-Environment="RUST_LOG=warn"
-ExecStart=/usr/local/sbin/os-sanitizer --gets --strcpy --sprintf --snprintf --printf-mutability --rwx-mem -v 0
+Environment="RUST_LOG=info"
+ExecStart=/usr/local/sbin/os-sanitizer --gets --strcpy --sprintf --snprintf --printf-mutability --rwx-mem --access --security-file-open --system-absolute --system-mutability -v 0
 
 [Install]
 WantedBy=multi-user.target
