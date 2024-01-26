@@ -33,7 +33,7 @@ impl FileOffsetResolver {
         let _ = Command::new("debuginfod-find")
             .arg("debuginfo")
             .arg(path.as_ref().as_os_str())
-            .stdout(Stdio::null())
+//            .stdout(Stdio::null())
             .status()
             .await;
 
@@ -74,15 +74,13 @@ impl FileOffsetResolver {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    let mut config = SymbolManagerConfig::default().use_debuginfod(false);
+    let mut config = SymbolManagerConfig::default().use_debuginfod(true);
 
     if let Some(home) = std::env::var_os("HOME") {
         let cache = Path::new(&home).join(".cache/debuginfod_client");
-        if cache.exists() {
-            config = SymbolManagerConfig::default()
-                .use_debuginfod(true)
-                .debuginfod_cache_dir_if_not_installed(cache)
-        }
+        config = SymbolManagerConfig::default()
+            .use_debuginfod(true)
+            .debuginfod_cache_dir_if_not_installed(cache);
     }
 
     let re = RegexBuilder::new(r"^(.+?) \((\/.*)\+0x([0-9a-f]+)\)\s*(?:\(BuildId:.+)?$")

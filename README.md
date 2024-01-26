@@ -2,8 +2,25 @@
 
 ## Prerequisites
 
-1. Install bpf-linker: `cargo install bpf-linker`
-2. Install `x86_64-unknown-linux-musl`: `rustup target add x86_64-unknown-linux-musl`
+1. Install clang (you need at least libclang.so) of your choice.
+2. Install Rust *nightly*: https://rustup.rs/
+3. Install bpf-linker from the `feature/fix-di` branch: `cargo install --git https://github.com/aya-rs/bpf-linker --branch feature/fix-di`
+4. Install `x86_64-unknown-linux-musl`: `rustup target add x86_64-unknown-linux-musl`
+5. Install `musl-gcc` for your system (e.g., for Ubuntu: `sudo apt install musl-tools`)
+6. Locally clone aya and apply the patch: `pushd ..; git clone https://github.com/aya-rs/aya.git; pushd aya; git apply ../os-sanitizer/aya.patch; popd; popd`
+7. Install `bpftool` for your system (e.g., for Ubuntu: `sudo apt install linux-tools-common`)
+8. Install `aya-tool`: `cargo install bindgen-cli; cargo install --path ../aya/aya-tool`
+
+## Generate Bindings
+
+Your system will use different struct layouts for kernel structures depending on its version.
+To generate a fresh set of bindings, use the command:
+
+```sh
+aya-tool generate task_struct dentry > os-sanitizer-ebpf/src/binding.rs
+```
+
+**You will need to do this every kernel upgrade.**
 
 ## Build eBPF
 
@@ -44,6 +61,12 @@ sudo journalctl -b -fu os-sanitizer
 ```
 
 ### Symbolisation
+
+Not all OSes have good debuginfod support. This has been tested on Fedora, but is known to not
+fetch source information on Ubuntu.
+
+From: https://ubuntu.com/server/docs/service-debuginfod
+> Currently, the service only provides DWARF information. There are plans to make it also index and serve source-code in the future.
 
 You need to install `debuginfod-find` for your system and set the `DEBUGINFOD_URLS` variable
 accordingly before using symbolisation.

@@ -17,3 +17,5 @@ Cargo.lock
 
 # Ghidra investigation folder
 investigation/
+
+os-sanitizer-ebpf/src/binding.rs
