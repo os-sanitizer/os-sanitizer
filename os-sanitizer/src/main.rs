@@ -188,6 +188,9 @@ struct Args {
     )]
     filep_unlocked: bool,
 
+    #[arg(long, help = "Enable all reporting strategies")]
+    all: bool,
+
     #[arg(
         long,
         short,
@@ -200,7 +203,23 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
-    let args = Args::parse();
+    let mut args = Args::parse();
+
+    if args.all {
+        args.access = true;
+        args.gets = true;
+        args.rwx_mem = true;
+        args.memcpy = true;
+        args.security_file_open = true;
+        args.strncpy = true;
+        args.strcpy = true;
+        args.sprintf = true;
+        args.snprintf = true;
+        args.printf_mutability = true;
+        args.system_mutability = true;
+        args.system_absolute = true;
+        args.filep_unlocked = true;
+    }
 
     if !(args.access
         || args.gets
@@ -538,7 +557,7 @@ async fn main() -> Result<(), anyhow::Error> {
                             .collect::<Vec<_>>();
 
                         // since we can't follow these stacktraces, best skip them
-                        let level = if stacktrace.len() <= 2 { Level::Info } else { level };
+                        // let level = if stacktrace.len() <= 2 { Level::Info } else { level };
 
                         let stacktrace = stacktrace.join("\n");
                         if index == 0 {
