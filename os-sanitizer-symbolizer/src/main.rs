@@ -6,7 +6,7 @@ use std::future::{ready, Future};
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+
 use tokio::fs;
 use tokio::io::{stdin, stdout, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;

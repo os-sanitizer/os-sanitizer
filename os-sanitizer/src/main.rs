@@ -370,6 +370,7 @@ async fn main() -> Result<(), anyhow::Error> {
                                 if let Ok(template) = unsafe {
                                     CStr::from_ptr(template.as_ptr() as *const c_char).to_str()
                                 } {
+                                    let template = template.trim();
                                     // there seems to be a common (but annoying) pattern where vsnprintf is cut up and
                                     // called with individual format arguments
                                     // we skip the report if it looks like this is a standalone printf arg or not utf8
@@ -378,9 +379,9 @@ async fn main() -> Result<(), anyhow::Error> {
 
                                     // reeeeally basic printf specifier check
                                     if template.starts_with('%')
-                                        && template[1..]
+                                        && template
                                         .chars()
-                                        .all(|c| "ldiuoxXfFeEgGaAcspn%#.*".contains(c))
+                                        .all(|c| "ldiuoxXfFeEgGaAcspn%#.*0123456789-".contains(c))
                                     {
                                         continue;
                                     }
