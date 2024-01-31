@@ -25,30 +25,34 @@ aya-tool generate task_struct dentry > os-sanitizer-ebpf/src/binding.rs
 ## Build eBPF
 
 ```bash
-cargo xtask build-ebpf
+cargo xtask build-ebpf --release
 ```
 
-To perform a release build you can use the `--release` flag.
-You may also change the target architecture with the `--target` flag.
+Users of older kernels (version <6) may need to additionally add the `--compat` flag.
 
 ## Build Userspace
 
 ```bash
-cargo build
+cargo build --release
 ```
+
+You can additionally add a `--target` flag to specify a target architecture, but you will need a binding file for your
+desired target.
 
 ## Run
 
 ```bash
-RUST_LOG=info cargo xtask run --help
+sudo env RUST_LOG=info ./target/release/os-sanitizer --help
 ```
+
+If you used a different target, you will need to use `./target/<TARGET>/release/os-sanitizer` instead.
 
 ### Installing as a service
 
 ```bash
 cargo xtask build-ebpf --release
 cargo build --release
-sudo cp target/x86_64-unknown-linux-musl/release/os-sanitizer /usr/local/sbin/
+sudo cp target/release/os-sanitizer /usr/local/sbin/
 sudo cp os-sanitizer.service /usr/lib/systemd/system/
 sudo systemctl enable os-sanitizer
 sudo service os-sanitizer start
