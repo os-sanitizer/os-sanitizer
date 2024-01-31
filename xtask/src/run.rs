@@ -16,6 +16,9 @@ pub struct Options {
     /// The command used to wrap your application
     #[clap(short, long, default_value = "sudo -E")]
     pub runner: String,
+    /// Whether to use backwards-compatible versions of bindings (use if it doesn't build the first time)
+    #[clap(long)]
+    pub compat: bool,
     /// Arguments to pass to your application
     #[clap(name = "args", last = true)]
     pub run_args: Vec<String>,
@@ -41,6 +44,7 @@ pub fn run(opts: Options) -> Result<(), anyhow::Error> {
     build_ebpf(BuildOptions {
         target: opts.bpf_target,
         release: opts.release,
+        compat: opts.compat,
     })
     .context("Error while building eBPF program")?;
     build(&opts).context("Error while building userspace application")?;

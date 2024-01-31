@@ -37,6 +37,9 @@ pub struct Options {
     /// Build the release target
     #[clap(long)]
     pub release: bool,
+    /// Whether to use backwards-compatible versions of bindings (use if it doesn't build the first time)
+    #[clap(long)]
+    pub compat: bool,
 }
 
 pub fn build_ebpf(opts: Options) -> Result<(), anyhow::Error> {
@@ -51,6 +54,10 @@ pub fn build_ebpf(opts: Options) -> Result<(), anyhow::Error> {
     ];
     if opts.release {
         args.push("--release")
+    }
+    if !opts.compat {
+        args.push("--features");
+        args.push("anon-struct");
     }
 
     // Command::new creates a child process which inherits all env variables. This means env

@@ -10,7 +10,7 @@ use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, CouldntRecoverStack,
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
 
 use crate::binding::vm_area_struct;
-use crate::{emit_report, IGNORED_PIDS, STACK_MAP};
+use crate::{access_vm_end, access_vm_flags, access_vm_start, emit_report, IGNORED_PIDS, STACK_MAP};
 
 #[fentry(function = "vma_set_page_prot")]
 fn fentry_vma_set_page_prot(probe: FEntryContext) -> u32 {
@@ -33,9 +33,9 @@ unsafe fn try_fentry_vma_set_page_prot(ctx: &FEntryContext) -> Result<u32, OsSan
     let vma = vma
         .as_ref()
         .ok_or(UnexpectedNull("VMA provided was null"))?;
-    let start = vma.__bindgen_anon_1.__bindgen_anon_1.vm_start;
-    let end = vma.__bindgen_anon_1.__bindgen_anon_1.vm_end;
-    let vm_flags = vma.__bindgen_anon_2.vm_flags;
+    let start = access_vm_start(vma);
+    let end = access_vm_end(vma);
+    let vm_flags = access_vm_flags(vma);
 
     // if writable and executable
     if (vm_flags & 0x00000002) != 0 && (vm_flags & 0x00000004) != 0 {

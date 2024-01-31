@@ -3,6 +3,9 @@ name = "os-sanitizer-ebpf"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+anon-struct = []
+
 [dependencies]
 aya-bpf = { path = "../../aya/bpf/aya-bpf" }
 aya-bpf-macros = { path = "../../aya/aya-bpf-macros" }

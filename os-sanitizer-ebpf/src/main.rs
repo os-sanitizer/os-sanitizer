@@ -2,6 +2,7 @@
 #![no_std]
 #![no_main]
 
+use core::ffi::c_ulong;
 use core::hint::unreachable_unchecked;
 
 use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
@@ -21,6 +22,7 @@ use os_sanitizer_common::{
     CopyViolation, OsSanitizerError, OsSanitizerReport, ToctouVariant, EXECUTABLE_LEN,
     SERIALIZED_SIZE,
 };
+use crate::binding::{vm_area_struct, vm_flags_t};
 
 use crate::strlen::STRLEN_MAP;
 
@@ -242,6 +244,38 @@ macro_rules! always_bad_call {
 
 always_bad_call!(access, Access);
 always_bad_call!(gets, Gets);
+
+// helpers for different emitted bindgen results
+#[cfg(feature = "anon-struct")]
+#[inline(always)]
+unsafe fn access_vm_flags(vm_area: &vm_area_struct) -> vm_flags_t {
+    vm_area.__bindgen_anon_2.vm_flags
+}
+#[cfg(not(feature = "anon-struct"))]
+#[inline(always)]
+fn access_vm_flags(vm_area: &vm_area_struct) -> vm_flags_t {
+    vm_area.vm_flags
+}
+#[cfg(feature = "anon-struct")]
+#[inline(always)]
+unsafe fn access_vm_start(vm_area: &vm_area_struct) -> c_ulong {
+    vm_area.__bindgen_anon_1.__bindgen_anon_1.vm_start
+}
+#[cfg(not(feature = "anon-struct"))]
+#[inline(always)]
+fn access_vm_start(vm_area: &vm_area_struct) -> c_ulong {
+    vm_area.vm_start
+}
+#[cfg(feature = "anon-struct")]
+#[inline(always)]
+unsafe fn access_vm_end(vm_area: &vm_area_struct) -> c_ulong {
+    vm_area.__bindgen_anon_1.__bindgen_anon_1.vm_end
+}
+#[cfg(not(feature = "anon-struct"))]
+#[inline(always)]
+fn access_vm_end(vm_area: &vm_area_struct) -> c_ulong {
+    vm_area.vm_end
+}
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {

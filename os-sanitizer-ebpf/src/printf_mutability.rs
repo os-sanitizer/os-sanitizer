@@ -1,5 +1,5 @@
 use crate::binding::vm_area_struct;
-use crate::{emit_report, IGNORED_PIDS, STACK_MAP};
+use crate::{access_vm_flags, emit_report, IGNORED_PIDS, STACK_MAP};
 use aya_bpf::bindings::{__u64, task_struct, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_long, c_void};
 use aya_bpf::helpers::gen::{bpf_get_current_comm, bpf_probe_read_user_str};
@@ -30,11 +30,10 @@ unsafe extern "C" fn printf_mutability_callback(
         template_param: u64,
         probe: &ProbeContext,
     ) -> Result<(), OsSanitizerError> {
-        let vm_flags = vma
-            .as_ref()
-            .ok_or(UnexpectedNull("VMA provided was null"))?
-            .__bindgen_anon_2
-            .vm_flags;
+        let vm_flags = access_vm_flags(
+            vma.as_ref()
+                .ok_or(UnexpectedNull("VMA provided was null"))?,
+        );
 
         // if writable
         if (vm_flags & 0x00000002) != 0 {

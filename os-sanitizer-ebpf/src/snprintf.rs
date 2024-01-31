@@ -169,7 +169,13 @@ unsafe fn maybe_report_sprintf<C: BpfContext>(
                     .get_mut(..user_read_amount)
                     .ok_or(Unreachable("bad length specified"))?,
             )
-            .map_err(|_| CouldntReadUser("snprintf -> write buf read", srcptr as u64, user_read_amount))?;
+            .map_err(|_| {
+                CouldntReadUser(
+                    "snprintf -> write buf read",
+                    srcptr as u64,
+                    user_read_amount,
+                )
+            })?;
 
             let mut report = OsSanitizerReport::Snprintf {
                 executable,
