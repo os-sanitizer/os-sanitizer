@@ -10,7 +10,7 @@ use aya_bpf::helpers::bpf_get_current_pid_tgid;
 use aya_bpf::helpers::gen::bpf_get_current_comm;
 use aya_bpf::macros::map;
 use aya_bpf::macros::uprobe;
-use aya_bpf::maps::{HashMap, LruHashMap, PerfEventArray, StackTrace};
+use aya_bpf::maps::{HashMap, LruHashMap, PerCpuArray, PerfEventArray, StackTrace};
 use aya_bpf::programs::ProbeContext;
 use aya_bpf::BpfContext;
 use aya_log_ebpf::{debug, error, info, warn};
@@ -19,6 +19,7 @@ use os_sanitizer_common::CopyViolation::Strlen;
 use os_sanitizer_common::OsSanitizerError::*;
 use os_sanitizer_common::{
     CopyViolation, OsSanitizerError, OsSanitizerReport, ToctouVariant, EXECUTABLE_LEN,
+    SERIALIZED_SIZE,
 };
 
 use crate::strlen::STRLEN_MAP;
@@ -53,7 +54,7 @@ pub static FLAGGED_FILE_OPEN_PIDS: LruHashMap<u64, ToctouVariant> =
     LruHashMap::with_max_entries(1 << 12, 0);
 
 #[map(name = "FUNCTION_REPORT_QUEUE")]
-pub static FUNCTION_REPORT_QUEUE: PerfEventArray<OsSanitizerReport> =
+pub static FUNCTION_REPORT_QUEUE: PerfEventArray<[u8; SERIALIZED_SIZE]> =
     PerfEventArray::with_max_entries(1 << 16, 0);
 
 #[map(name = "STACKTRACES")]
@@ -145,6 +146,9 @@ fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 
                 "Unexpected null pointer while handling {}: {}", name, op, errno
             );
         }
+        SerialisationError(op) => {
+            error!(probe, "Couldn't serialise {}: {}", name, op);
+        }
     }
     e.into()
 }
@@ -167,6 +171,25 @@ unsafe fn try_check_bad_copy(
     }
 
     Ok(report)
+}
+
+#[map]
+pub static REPORT_SCRATCH: PerCpuArray<[u8; SERIALIZED_SIZE]> = PerCpuArray::with_max_entries(1, 0);
+
+#[inline(always)]
+pub(crate) unsafe fn emit_report<C: BpfContext>(
+    ctx: &C,
+    report: &OsSanitizerReport,
+) -> Result<(), OsSanitizerError> {
+    let ptr = REPORT_SCRATCH
+        .get_ptr_mut(0)
+        .ok_or(CouldntAccessBuffer("emit-report"))?;
+    let buf = &mut *ptr;
+    report
+        .serialise_into(buf)
+        .map_err(|_| SerialisationError("emit-report"))?;
+    FUNCTION_REPORT_QUEUE.output(ctx, buf, 0);
+    Ok(())
 }
 
 macro_rules! always_bad_call {
@@ -203,13 +226,13 @@ macro_rules! always_bad_call {
                     return Err(CouldntGetComm(concat!(stringify!($name), " comm"), res));
                 }
 
-                let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::$variant {
+                let report = OsSanitizerReport::$variant {
                     executable,
                     pid_tgid,
                     stack_id,
-                });
+                };
 
-                FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
+                $crate::emit_report(probe, &report)?;
 
                 Ok(0)
             }

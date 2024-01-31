@@ -1,5 +1,5 @@
 use crate::binding::vm_area_struct;
-use crate::{FUNCTION_REPORT_QUEUE, IGNORED_PIDS, STACK_MAP};
+use crate::{emit_report, IGNORED_PIDS, STACK_MAP};
 use aya_bpf::bindings::{__u64, task_struct, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_long, c_void};
 use aya_bpf::helpers::gen::{bpf_get_current_comm, bpf_probe_read_user_str};
@@ -61,15 +61,15 @@ unsafe extern "C" fn system_mutability_callback(
                 command_param as _,
             );
 
-            let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::SystemMutability {
+            let report = OsSanitizerReport::SystemMutability {
                 executable,
                 pid_tgid,
                 stack_id,
                 command_param,
                 command,
-            });
+            };
 
-            FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
+            emit_report(probe, &report)?;
         }
 
         Ok(())

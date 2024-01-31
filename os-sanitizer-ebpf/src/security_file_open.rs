@@ -1,5 +1,5 @@
 use crate::binding::file;
-use crate::{FLAGGED_FILE_OPEN_PIDS, FUNCTION_REPORT_QUEUE, IGNORED_PIDS, STACK_MAP};
+use crate::{emit_report, FLAGGED_FILE_OPEN_PIDS, IGNORED_PIDS, STACK_MAP};
 use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_char, c_void, uintptr_t};
 use aya_bpf::helpers::gen::bpf_get_current_comm;
@@ -31,12 +31,12 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
     let inode = (*data).f_inode;
     let i_mode = (*inode).i_mode as u64;
 
-    let (variant, toctou) = if i_mode & 0b010 != 0 && i_mode & 0xF000 != 0xA000 {
-        (Perms, None)
+    let variant = if i_mode & 0b010 != 0 && i_mode & 0xF000 != 0xA000 {
+        Perms
     } else if let Some(&variant) = FLAGGED_FILE_OPEN_PIDS.get(&pid_tgid) {
         let _ = FLAGGED_FILE_OPEN_PIDS.remove(&pid_tgid); // maybe removed by race
 
-        (Toctou, Some(variant))
+        Toctou(variant)
     } else {
         return Ok(0);
     };
@@ -73,17 +73,16 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
             .map_err(|e| CouldntRecoverStack("security_file_open", e))?
             as u64;
 
-        let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::Open {
+        let report = OsSanitizerReport::Open {
             executable,
             pid_tgid,
             stack_id,
             i_mode,
             filename,
             variant,
-            toctou,
-        });
+        };
 
-        FUNCTION_REPORT_QUEUE.output(ctx, &report, 0);
+        emit_report(ctx, &report)?;
     }
 
     Ok(0)

@@ -1,4 +1,4 @@
-use crate::{emit_error, FUNCTION_REPORT_QUEUE, STACK_MAP};
+use crate::{emit_error, emit_report, STACK_MAP};
 use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::helpers::bpf_get_current_pid_tgid;
 use aya_bpf::helpers::gen::bpf_get_current_comm;
@@ -23,7 +23,7 @@ unsafe fn check_filep_usage(probe: &ProbeContext, pid_tgid: u64, filep: u64) {
             unsafe fn report(probe: &ProbeContext, pid_tgid: u64) -> Result<(), OsSanitizerError> {
                 let stack_id = STACK_MAP
                     .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-                    .map_err(|e| CouldntRecoverStack("printf-mutability", e))?
+                    .map_err(|e| CouldntRecoverStack("filep-unlocked", e))?
                     as u64;
 
                 let mut executable = [0u8; EXECUTABLE_LEN];
@@ -34,18 +34,16 @@ unsafe fn check_filep_usage(probe: &ProbeContext, pid_tgid: u64, filep: u64) {
                     executable.len() as u32,
                 );
                 if res < 0 {
-                    return Err(CouldntGetComm("sprintf comm", res));
+                    return Err(CouldntGetComm("filep-unlocked comm", res));
                 }
 
-                let report =
-                    OsSanitizerReport::zeroed_init(|| OsSanitizerReport::FilePointerLocking {
-                        executable,
-                        pid_tgid,
-                        stack_id,
-                    });
+                let report = OsSanitizerReport::FilePointerLocking {
+                    executable,
+                    pid_tgid,
+                    stack_id,
+                };
 
-                FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
-                Ok(())
+                emit_report(probe, &report)
             }
 
             if let Err(e) = report(probe, pid_tgid) {

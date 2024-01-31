@@ -1,4 +1,4 @@
-use crate::{FUNCTION_REPORT_QUEUE, IGNORED_PIDS, STACK_MAP};
+use crate::{emit_report, IGNORED_PIDS, STACK_MAP};
 use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_void, uintptr_t};
 use aya_bpf::helpers::bpf_get_current_pid_tgid;
@@ -72,14 +72,14 @@ unsafe fn try_uprobe_sprintf(probe: &ProbeContext) -> Result<u32, OsSanitizerErr
             return Err(CouldntGetComm("sprintf comm", res));
         }
 
-        let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::Sprintf {
+        let report = OsSanitizerReport::Sprintf {
             executable,
             pid_tgid,
             stack_id,
-            dest: destptr,
-        });
+            dest: destptr as u64,
+        };
 
-        FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
+        emit_report(probe, &report)?;
     }
 
     Ok(0)

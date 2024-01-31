@@ -8,7 +8,7 @@ use aya_bpf_macros::uprobe;
 use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, CouldntRecoverStack, Unreachable};
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN, TEMPLATE_LEN};
 
-use crate::{FUNCTION_REPORT_QUEUE, IGNORED_PIDS, STACK_MAP};
+use crate::{emit_report, IGNORED_PIDS, STACK_MAP};
 
 #[inline(always)]
 unsafe fn check_system_absolute(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
@@ -45,15 +45,15 @@ unsafe fn check_system_absolute(probe: &ProbeContext) -> Result<u32, OsSanitizer
             return Err(CouldntGetComm("system-absolute comm", res));
         }
 
-        let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::SystemAbsolute {
+        let report = OsSanitizerReport::SystemAbsolute {
             executable,
             pid_tgid,
             stack_id,
             command_param,
             command,
-        });
+        };
 
-        FUNCTION_REPORT_QUEUE.output(probe, &report, 0);
+        emit_report(probe, &report)?;
     }
 
     Ok(0)

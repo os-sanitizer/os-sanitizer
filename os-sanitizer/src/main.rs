@@ -1,40 +1,41 @@
-mod resolver;
-
-use crate::resolver::{ProcMap, ProcMapOffsetResolver};
-use aya::{
-    include_bytes_aligned,
-    maps::{AsyncPerfEventArray, HashMap as AyaHashMap, StackTraceMap},
-    programs::FEntry,
-    util::online_cpus,
-    Bpf, Btf,
-};
-use aya_log::BpfLogger;
-use bytes::BytesMut;
-use clap::{CommandFactory, Parser};
-use either::Either;
-use libc::pid_t;
-use log::{debug, log, warn, Level};
-use os_sanitizer_common::{CopyViolation, OpenViolation, OsSanitizerReport, SnprintfViolation};
-use std::collections::HashMap;
-
-use cpp_demangle::DemangleOptions;
-use once_cell::sync::Lazy;
-use std::mem::size_of;
-use std::process::Stdio;
-use std::time::Duration;
 use std::{
     ffi::{c_char, CStr},
     process::exit,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
+use std::collections::HashMap;
+use std::process::Stdio;
+use std::time::Duration;
+
+use aya::{
+    Bpf,
+    Btf,
+    include_bytes_aligned,
+    maps::{AsyncPerfEventArray, HashMap as AyaHashMap, StackTraceMap},
+    programs::FEntry, util::online_cpus,
+};
+use aya_log::BpfLogger;
+use bytes::BytesMut;
+use clap::{CommandFactory, Parser};
+use cpp_demangle::DemangleOptions;
+use either::Either;
+use libc::pid_t;
+use log::{debug, Level, log, warn};
+use once_cell::sync::Lazy;
+use tokio::{signal, task};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
-use tokio::{signal, task};
+
+use os_sanitizer_common::{CopyViolation, OpenViolation, OsSanitizerReport, SERIALIZED_SIZE, SnprintfViolation};
+
+use crate::resolver::{ProcMap, ProcMapOffsetResolver};
+
+mod resolver;
 
 const PROCMAP_CACHE_TIME: u64 = 30;
 static DEMANGLE_OPTIONS: Lazy<DemangleOptions> = Lazy::new(DemangleOptions::new);
@@ -302,13 +303,17 @@ async fn main() -> Result<(), anyhow::Error> {
             let keep_going = keep_going.clone();
             tasks.push(task::spawn(async move {
                 let mut buffers = (0..32)
-                    .map(|_| BytesMut::with_capacity(size_of::<OsSanitizerReport>()))
+                    .map(|_| BytesMut::with_capacity(512))
                     .collect::<Vec<_>>();
 
                 while keep_going.load(Ordering::Relaxed) {
                     let events = buf.read_events(&mut buffers).await.unwrap();
                     for buf in buffers.iter_mut().take(events.read) {
-                        let report = unsafe { (buf.as_ptr() as *const OsSanitizerReport).read_unaligned() };
+                        let report = unsafe { (buf.as_ptr() as *const [u8; SERIALIZED_SIZE]).read_unaligned() };
+                        let Ok(report) = OsSanitizerReport::try_from(report) else {
+                            warn!("Failed to deserialise a report.");
+                            continue;
+                        };
 
                         let (executable, pid, tgid, stacktrace) = match report {
                             OsSanitizerReport::PrintfMutability { executable, pid_tgid, stack_id, .. }
@@ -440,7 +445,7 @@ async fn main() -> Result<(), anyhow::Error> {
                             OsSanitizerReport::Memcpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
                                 (format!("{context} invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn, 0)
                             }
-                            OsSanitizerReport::Open { i_mode, filename, variant, toctou, .. } => {
+                            OsSanitizerReport::Open { i_mode, filename, variant, .. } => {
                                 if executable == "ls" {
                                     continue;
                                 }
@@ -463,8 +468,8 @@ async fn main() -> Result<(), anyhow::Error> {
                                     _ => unreachable!(),
                                 };
 
-                                match (variant, toctou) {
-                                    (OpenViolation::Perms, None) => {
+                                match variant {
+                                    OpenViolation::Perms => {
                                         let mut rendered = [0; 9];
                                         for (i, e) in rendered.iter_mut().enumerate() {
                                             let b = if i_mode & (0b1 << (9 - i - 1)) != 0 {
@@ -497,10 +502,9 @@ async fn main() -> Result<(), anyhow::Error> {
                                             (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), Level::Info, 0)
                                         }
                                     }
-                                    (OpenViolation::Toctou, Some(variant)) => {
+                                    OpenViolation::Toctou(variant) => {
                                         (format!("{context} opened `{filename}' (a {filetype}) after accessing it via {variant}, a known TOCTOU pattern"), Level::Info, 0)
                                     }
-                                    _ => unreachable!("Invalid combination of reporting data")
                                 }
                             }
                             OsSanitizerReport::Access { .. } => {

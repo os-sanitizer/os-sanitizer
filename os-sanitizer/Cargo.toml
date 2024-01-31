@@ -10,13 +10,14 @@ publish = false
 aya = { path = "../../aya/aya", features = ["async_tokio"] }
 aya-log = { path = "../../aya/aya-log" }
 os-sanitizer-common = { path = "../os-sanitizer-common", features = ["user"] }
+postcard = { version = "1", default-features = false }
 
 anyhow = "1"
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
 cpp_demangle = "0.4.3"
 either = "1.9"
-env_logger = "0.10"
+env_logger = "0.11"
 libc = "0.2"
 log = "0.4"
 thiserror = "1.0"

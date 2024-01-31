@@ -15,7 +15,7 @@ use os_sanitizer_common::{
     OsSanitizerError, OsSanitizerReport, SnprintfViolation, EXECUTABLE_LEN, WRITTEN_LEN,
 };
 
-use crate::{FUNCTION_REPORT_QUEUE, IGNORED_PIDS, STACK_MAP};
+use crate::{emit_report, IGNORED_PIDS, STACK_MAP};
 
 #[map]
 static SNPRINTF_SAFE_WRAPPED: LruHashMap<u64, u8> = LruHashMap::with_max_entries(1 << 16, 0);
@@ -169,21 +169,21 @@ unsafe fn maybe_report_sprintf<C: BpfContext>(
                     .get_mut(..user_read_amount)
                     .ok_or(Unreachable("bad length specified"))?,
             )
-            .map_err(|_| CouldntReadUser("snprintf -> write buf read", srcptr, user_read_amount))?;
+            .map_err(|_| CouldntReadUser("snprintf -> write buf read", srcptr as u64, user_read_amount))?;
 
-            let mut report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::Snprintf {
+            let mut report = OsSanitizerReport::Snprintf {
                 executable,
                 pid_tgid,
                 stack_id,
-                srcptr,
-                size,
-                computed,
-                count,
+                srcptr: srcptr as u64,
+                size: size as u64,
+                computed: computed as u64,
+                count: count as u64,
                 kind,
                 index: 1,
-            });
+            };
 
-            FUNCTION_REPORT_QUEUE.output(ctx, &report, 0);
+            emit_report(ctx, &report)?;
 
             let second_stack_id = STACK_MAP
                 .get_stackid(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
@@ -198,7 +198,7 @@ unsafe fn maybe_report_sprintf<C: BpfContext>(
                 *index = 2;
             }
 
-            FUNCTION_REPORT_QUEUE.output(ctx, &report, 0);
+            emit_report(ctx, &report)?;
         }
     }
 

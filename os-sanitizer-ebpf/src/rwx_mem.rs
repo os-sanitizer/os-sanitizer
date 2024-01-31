@@ -10,7 +10,7 @@ use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, CouldntRecoverStack,
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
 
 use crate::binding::vm_area_struct;
-use crate::{FUNCTION_REPORT_QUEUE, IGNORED_PIDS, STACK_MAP};
+use crate::{emit_report, IGNORED_PIDS, STACK_MAP};
 
 #[fentry(function = "vma_set_page_prot")]
 fn fentry_vma_set_page_prot(probe: FEntryContext) -> u32 {
@@ -54,15 +54,15 @@ unsafe fn try_fentry_vma_set_page_prot(ctx: &FEntryContext) -> Result<u32, OsSan
             return Err(CouldntGetComm("rwx-vma comm", res));
         }
 
-        let report = OsSanitizerReport::zeroed_init(|| OsSanitizerReport::RwxVma {
+        let report = OsSanitizerReport::RwxVma {
             executable,
             pid_tgid,
             stack_id,
             start,
             end,
-        });
+        };
 
-        FUNCTION_REPORT_QUEUE.output(ctx, &report, 0);
+        emit_report(ctx, &report)?;
     }
 
     Ok(0)
