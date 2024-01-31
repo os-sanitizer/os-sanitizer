@@ -93,11 +93,14 @@ macro_rules! attach_many_uprobe_uretprobe {
 
 macro_rules! attach_uprobe {
     ($bpf: expr, $name: literal, $([$libraries: literal, $functions: literal]),+$(,)?) => {
+        print!(concat!(concat!("loading uprobe_", $name), "..."));
+        let _ = std::io::stdout().lock().flush();
         let program: &mut ::aya::programs::UProbe = $bpf
             .program_mut(concat!("uprobe_", $name))
             .unwrap()
             .try_into()?;
         program.load()?;
+        println!("done");
         attach_many_uprobe_uretprobe!(program, $name, "uprobe", $([$libraries, $functions]),+);
     };
 
@@ -108,11 +111,14 @@ macro_rules! attach_uprobe {
 
 macro_rules! attach_uretprobe {
     ($bpf: expr, $name: literal, $([$libraries: literal, $functions: literal]),+$(,)?) => {
+        print!(concat!(concat!("loading uretprobe_", $name), "..."));
+        let _ = std::io::stdout().lock().flush();
         let program: &mut ::aya::programs::UProbe = $bpf
             .program_mut(concat!("uretprobe_", $name))
             .unwrap()
             .try_into()?;
         program.load()?;
+        println!("done");
         attach_many_uprobe_uretprobe!(program, $name, "uretprobe", $([$libraries, $functions]),+);
     };
 

@@ -1,13 +1,15 @@
 #![cfg_attr(not(feature = "user"), no_std)]
 
-use core::mem::{size_of, size_of_val};
+#[cfg(feature = "user")]
+use core::mem::size_of;
+use core::mem::size_of_val;
 
 pub const EXECUTABLE_LEN: usize = 16;
-pub const WRITTEN_LEN: usize = 128;
-pub const FILENAME_LEN: usize = 128;
-pub const TEMPLATE_LEN: usize = 128;
+pub const WRITTEN_LEN: usize = 64;
+pub const FILENAME_LEN: usize = 64;
+pub const TEMPLATE_LEN: usize = 64;
 
-pub const SERIALIZED_SIZE: usize = 512;
+pub const SERIALIZED_SIZE: usize = 256;
 
 #[repr(u32)]
 pub enum OsSanitizerError {
@@ -165,9 +167,11 @@ pub enum OsSanitizerReport {
 }
 
 trait SerialisedContent {
+    #[cfg(feature = "user")]
     fn read(&mut self, content: &mut [u8]) -> Result<&mut Self, OsSanitizerError>;
     fn write(&mut self, content: &[u8]) -> Result<&mut Self, OsSanitizerError>;
 
+    #[cfg(feature = "user")]
     fn read_u64(&mut self, content: &mut u64) -> Result<&mut Self, OsSanitizerError> {
         let mut buf = [0u8; size_of::<u64>()];
         let next = self.read(&mut buf)?;
@@ -177,6 +181,7 @@ trait SerialisedContent {
 }
 
 impl SerialisedContent for [u8] {
+    #[cfg(feature = "user")]
     fn read(&mut self, content: &mut [u8]) -> Result<&mut Self, OsSanitizerError> {
         content.copy_from_slice(self.get_mut(..content.len()).ok_or({
             OsSanitizerError::SerialisationError("not enough space to serialise")
@@ -187,9 +192,12 @@ impl SerialisedContent for [u8] {
     }
 
     fn write(&mut self, content: &[u8]) -> Result<&mut Self, OsSanitizerError> {
-        self.get_mut(..content.len())
-            .ok_or(OsSanitizerError::SerialisationError("not enough space to serialise"))?
-            .copy_from_slice(content);
+        let dest = self.get_mut(..content.len())
+            .ok_or(OsSanitizerError::SerialisationError("not enough space to serialise"))?;
+        unsafe {
+            // we use unsafe here because copy_from_slice may "panic"
+            dest.as_mut_ptr().copy_from(content.as_ptr(), content.len());
+        }
         self.get_mut(content.len()..).ok_or({
             OsSanitizerError::SerialisationError("not enough space to continue serialising")
         })
