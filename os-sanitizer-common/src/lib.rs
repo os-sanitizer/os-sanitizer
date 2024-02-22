@@ -60,6 +60,13 @@ pub enum CopyViolation {
     Malloc,
 }
 
+#[derive(Copy, Clone)]
+pub enum FixedMmapViolation {
+    HintUsed,
+    FixedMmapUnmapped,
+    FixedMmapBadProt,
+}
+
 #[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub enum SnprintfViolation {
     PossibleLeak,
@@ -164,6 +171,13 @@ pub enum OsSanitizerReport {
         pid_tgid: u64,
         stack_id: u64,
     },
+    FixedMmap {
+        executable: [u8; EXECUTABLE_LEN],
+        pid_tgid: u64,
+        stack_id: u64,
+        protection: u64,
+        variant: FixedMmapViolation,
+    },
 }
 
 trait SerialisedContent {
@@ -183,17 +197,21 @@ trait SerialisedContent {
 impl SerialisedContent for [u8] {
     #[cfg(feature = "user")]
     fn read(&mut self, content: &mut [u8]) -> Result<&mut Self, OsSanitizerError> {
-        content.copy_from_slice(self.get_mut(..content.len()).ok_or({
-            OsSanitizerError::SerialisationError("not enough space to serialise")
-        })?);
+        content
+            .copy_from_slice(self.get_mut(..content.len()).ok_or({
+                OsSanitizerError::SerialisationError("not enough space to serialise")
+            })?);
         self.get_mut(content.len()..).ok_or({
             OsSanitizerError::SerialisationError("not enough space to continue serialising")
         })
     }
 
     fn write(&mut self, content: &[u8]) -> Result<&mut Self, OsSanitizerError> {
-        let dest = self.get_mut(..content.len())
-            .ok_or(OsSanitizerError::SerialisationError("not enough space to serialise"))?;
+        let dest = self
+            .get_mut(..content.len())
+            .ok_or(OsSanitizerError::SerialisationError(
+                "not enough space to serialise",
+            ))?;
         unsafe {
             // we use unsafe here because copy_from_slice may "panic"
             dest.as_mut_ptr().copy_from(content.as_ptr(), content.len());
@@ -221,6 +239,7 @@ impl OsSanitizerReport {
             OsSanitizerReport::Open { .. } => 10,
             OsSanitizerReport::Access { .. } => 11,
             OsSanitizerReport::Gets { .. } => 12,
+            OsSanitizerReport::FixedMmap { .. } => 13,
         }])?;
         let buf = match self {
             OsSanitizerReport::RwxVma {
@@ -297,6 +316,12 @@ impl OsSanitizerReport {
                 executable,
                 pid_tgid,
                 stack_id,
+            }
+            | OsSanitizerReport::FixedMmap {
+                executable,
+                pid_tgid,
+                stack_id,
+                ..
             } => buf
                 .write(executable)?
                 .write(&pid_tgid.to_be_bytes())?
@@ -403,6 +428,18 @@ impl OsSanitizerReport {
             }
             OsSanitizerReport::Access { .. } => {}
             OsSanitizerReport::Gets { .. } => {}
+            OsSanitizerReport::FixedMmap {
+                protection,
+                variant,
+                ..
+            } => {
+                let buf = buf.write(&protection.to_be_bytes())?;
+                buf[0] = match variant {
+                    FixedMmapViolation::HintUsed => 0,
+                    FixedMmapViolation::FixedMmapUnmapped => 1,
+                    FixedMmapViolation::FixedMmapBadProt => 2,
+                }
+            }
         }
         Ok(())
     }
@@ -613,6 +650,23 @@ impl TryFrom<[u8; SERIALIZED_SIZE]> for OsSanitizerReport {
                 pid_tgid,
                 stack_id,
             },
+            13 => {
+                let mut protection = 0;
+                let value = value.read_u64(&mut protection)?;
+                let variant = match value[0] {
+                    0 => FixedMmapViolation::HintUsed,
+                    1 => FixedMmapViolation::FixedMmapUnmapped,
+                    2 => FixedMmapViolation::FixedMmapBadProt,
+                    _ => unreachable!(),
+                };
+                OsSanitizerReport::FixedMmap {
+                    executable,
+                    pid_tgid,
+                    stack_id,
+                    protection,
+                    variant,
+                }
+            }
             _ => {
                 unreachable!("did you forget to implement a report type?")
             }

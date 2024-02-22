@@ -47,6 +47,7 @@ mod sys_openat2;
 mod system_absolute;
 mod system_mutability;
 mod vfs_fstatat;
+mod fixed_mmap;
 
 #[map(name = "IGNORED_PIDS")]
 pub static IGNORED_PIDS: HashMap<u32, u8> = HashMap::with_max_entries(1 << 12, 0);

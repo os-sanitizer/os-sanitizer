@@ -1,37 +1,37 @@
+use std::collections::HashMap;
+use std::process::Stdio;
+use std::time::Duration;
 use std::{
     ffi::{c_char, CStr},
     process::exit,
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
 };
-use std::collections::HashMap;
-use std::process::Stdio;
-use std::time::Duration;
 
 use aya::{
-    Bpf,
-    Btf,
     include_bytes_aligned,
     maps::{AsyncPerfEventArray, HashMap as AyaHashMap, StackTraceMap},
-    programs::FEntry, util::online_cpus,
+    programs::FEntry,
+    util::online_cpus,
+    Bpf, Btf,
 };
 use aya_log::BpfLogger;
 use bytes::BytesMut;
 use clap::{CommandFactory, Parser};
 use cpp_demangle::DemangleOptions;
 use either::Either;
-use libc::pid_t;
-use log::{debug, Level, log, warn};
+use libc::{pid_t, PROT_EXEC};
+use log::{debug, log, warn, Level};
 use once_cell::sync::Lazy;
-use tokio::{signal, task};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
+use tokio::{signal, task};
 
-use os_sanitizer_common::{CopyViolation, OpenViolation, OsSanitizerReport, SERIALIZED_SIZE, SnprintfViolation};
+use os_sanitizer_common::{CopyViolation, OpenViolation, OsSanitizerReport, SnprintfViolation, SERIALIZED_SIZE, FixedMmapViolation};
 
 use crate::resolver::{ProcMap, ProcMapOffsetResolver};
 
@@ -194,6 +194,11 @@ struct Args {
         help = "Log violations of file pointer `_unlocked' functions being used on multiple threads"
     )]
     filep_unlocked: bool,
+    #[arg(
+        long,
+        help = "Log violations of mmap being used with fixed addresses"
+    )]
+    fixed_mmap: bool,
 
     #[arg(long, help = "Enable all reporting strategies")]
     all: bool,
@@ -226,6 +231,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.system_mutability = true;
         args.system_absolute = true;
         args.filep_unlocked = true;
+        args.fixed_mmap = true;
     }
 
     if !(args.access
@@ -240,7 +246,8 @@ async fn main() -> Result<(), anyhow::Error> {
         || args.printf_mutability
         || args.system_mutability
         || args.system_absolute
-        || args.filep_unlocked)
+        || args.filep_unlocked
+        || args.fixed_mmap)
     {
         eprintln!("You must specify one of the modes.");
         <Args as CommandFactory>::command().print_help()?;
@@ -264,15 +271,6 @@ async fn main() -> Result<(), anyhow::Error> {
         debug!("remove limit on locked memory failed, ret is: {}", ret);
     }
 
-    // This will include your eBPF object file as raw bytes at compile-time and load it at
-    // runtime. This approach is recommended for most real-world use cases. If you would
-    // like to specify the eBPF program at runtime rather than at compile-time, you can
-    // reach for `Bpf::load_file` instead.
-    #[cfg(debug_assertions)]
-    let mut bpf = Bpf::load(include_bytes_aligned!(
-        "../../target/bpfel-unknown-none/debug/os-sanitizer"
-    ))?;
-    #[cfg(not(debug_assertions))]
     let mut bpf = Bpf::load(include_bytes_aligned!(
         "../../target/bpfel-unknown-none/release/os-sanitizer"
     ))?;
@@ -334,7 +332,9 @@ async fn main() -> Result<(), anyhow::Error> {
                               | OsSanitizerReport::Open { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Access { executable, pid_tgid, stack_id, .. }
                               | OsSanitizerReport::Gets { executable, pid_tgid, stack_id, .. }
-                              | OsSanitizerReport::RwxVma { executable, pid_tgid, stack_id, .. } => {
+                              | OsSanitizerReport::RwxVma { executable, pid_tgid, stack_id, .. }
+                              | OsSanitizerReport::FixedMmap { executable, pid_tgid, stack_id, .. }
+                            => {
                                 let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
                                     warn!("Couldn't recover the name of an executable.");
                                     continue;
@@ -521,6 +521,23 @@ async fn main() -> Result<(), anyhow::Error> {
                             }
                             OsSanitizerReport::RwxVma { start, end, .. } => {
                                 (format!("{context} updated a memory region at {start:#x}-{end:#x} to be simultaneously writable and executable"), Level::Warn, 0)
+                            }
+                            OsSanitizerReport::FixedMmap { protection, variant, .. } => {
+                                match variant {
+                                    FixedMmapViolation::HintUsed => {
+                                        if protection & PROT_EXEC as u64 != 0 {
+                                            (format!("{context} attempted to map an executable memory region at a fixed address"), Level::Warn, 0)
+                                        } else {
+                                            (format!("{context} attempted to map an non-executable memory region at a fixed address"), Level::Info, 0)
+                                        }
+                                    }
+                                    FixedMmapViolation::FixedMmapUnmapped => {
+                                        (format!("{context} mapped a memory region with MAP_FIXED without preallocating at the same region"), Level::Warn, 0)
+                                    }
+                                    FixedMmapViolation::FixedMmapBadProt => {
+                                        (format!("{context} mapped a memory region with MAP_FIXED on a memory region which was allocated with non-zero protections"), Level::Info, 0)
+                                    }
+                                }
                             }
                         };
 
@@ -777,6 +794,10 @@ async fn main() -> Result<(), anyhow::Error> {
 
     if args.rwx_mem {
         attach_fentry!(bpf, btf, "vma_set_page_prot");
+    }
+
+    if args.fixed_mmap {
+        attach_fentry!(bpf, btf, "ksys_mmap_pgoff", "fixed_mmap");
     }
 
     signal::ctrl_c().await?;

@@ -12,7 +12,7 @@ use os_sanitizer_common::OsSanitizerError::{
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN, TEMPLATE_LEN};
 
 #[repr(C)]
-pub struct SystemMutabilityContext {
+struct SystemMutabilityContext {
     pid_tgid: u64,
     command_param: __u64,
     probe: *const ProbeContext,

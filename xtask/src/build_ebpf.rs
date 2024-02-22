@@ -52,9 +52,7 @@ pub fn build_ebpf(opts: Options) -> Result<(), anyhow::Error> {
         "-Z",
         "build-std=core",
     ];
-    if opts.release {
-        args.push("--release")
-    }
+    args.push("--release");
     if !opts.compat {
         args.push("--features");
         args.push("anon-struct");
