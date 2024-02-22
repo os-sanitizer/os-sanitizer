@@ -22,7 +22,7 @@ use os_sanitizer_common::{
     CopyViolation, OsSanitizerError, OsSanitizerReport, ToctouVariant, EXECUTABLE_LEN,
     SERIALIZED_SIZE,
 };
-use crate::binding::{vm_area_struct, vm_flags_t};
+use crate::binding::vm_area_struct;
 
 use crate::strlen::STRLEN_MAP;
 
@@ -248,12 +248,12 @@ always_bad_call!(gets, Gets);
 // helpers for different emitted bindgen results
 #[cfg(feature = "anon-struct")]
 #[inline(always)]
-unsafe fn access_vm_flags(vm_area: &vm_area_struct) -> vm_flags_t {
+unsafe fn access_vm_flags(vm_area: &vm_area_struct) -> binding::vm_flags_t {
     vm_area.__bindgen_anon_2.vm_flags
 }
 #[cfg(not(feature = "anon-struct"))]
 #[inline(always)]
-fn access_vm_flags(vm_area: &vm_area_struct) -> vm_flags_t {
+fn access_vm_flags(vm_area: &vm_area_struct) -> u64 {
     vm_area.vm_flags
 }
 #[cfg(feature = "anon-struct")]

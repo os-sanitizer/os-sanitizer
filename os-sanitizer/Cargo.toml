@@ -10,7 +10,6 @@ publish = false
 aya = { path = "../../aya/aya", features = ["async_tokio"] }
 aya-log = { path = "../../aya/aya-log" }
 os-sanitizer-common = { path = "../os-sanitizer-common", features = ["user"] }
-postcard = { version = "1", default-features = false }
 
 anyhow = "1"
 bytes = "1"
