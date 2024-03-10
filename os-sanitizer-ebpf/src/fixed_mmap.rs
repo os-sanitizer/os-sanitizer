@@ -1,18 +1,22 @@
 use core::ffi::c_ulong;
 
-use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK, task_struct};
+use aya_bpf::bindings::{task_struct, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_long, c_void};
-use aya_bpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
 use aya_bpf::helpers::gen::bpf_get_current_comm;
+use aya_bpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
 use aya_bpf::maps::LruHashMap;
 use aya_bpf::programs::{FEntryContext, ProbeContext};
 use aya_bpf_macros::{fentry, map, uprobe, uretprobe};
 
-use os_sanitizer_common::{EXECUTABLE_LEN, FixedMmapViolation, OsSanitizerError, OsSanitizerReport};
-use os_sanitizer_common::OsSanitizerError::{CouldntFindVma, CouldntGetComm, CouldntRecoverStack, UnexpectedNull, Unreachable};
+use os_sanitizer_common::OsSanitizerError::{
+    CouldntFindVma, CouldntGetComm, CouldntRecoverStack, UnexpectedNull, Unreachable,
+};
+use os_sanitizer_common::{
+    FixedMmapViolation, OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN,
+};
 
-use crate::{access_vm_flags, emit_report, IGNORED_PIDS, STACK_MAP};
 use crate::binding::vm_area_struct;
+use crate::{access_vm_flags, emit_report, IGNORED_PIDS, STACK_MAP};
 
 const MAP_FIXED: c_ulong = 16; // manually determined
 
@@ -23,11 +27,15 @@ struct MmapFixedContext {
     probe: *const FEntryContext,
 }
 
-unsafe fn emit_fixed_mmap_report(probe: &FEntryContext, pid_tgid: u64, protection: u64, variant: FixedMmapViolation) -> Result<(), OsSanitizerError> {
+unsafe fn emit_fixed_mmap_report(
+    probe: &FEntryContext,
+    pid_tgid: u64,
+    protection: u64,
+    variant: FixedMmapViolation,
+) -> Result<(), OsSanitizerError> {
     let stack_id = STACK_MAP
         .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-        .map_err(|e| CouldntRecoverStack("fixed-mmap", e))?
-        as u64;
+        .map_err(|e| CouldntRecoverStack("fixed-mmap", e))? as u64;
 
     let mut executable = [0u8; EXECUTABLE_LEN];
 
@@ -45,7 +53,7 @@ unsafe fn emit_fixed_mmap_report(probe: &FEntryContext, pid_tgid: u64, protectio
         pid_tgid,
         stack_id,
         protection,
-        variant
+        variant,
     };
     emit_report(probe, &report)
 }
@@ -62,13 +70,19 @@ unsafe extern "C" fn mmap_fixed_callback(
         protection: u64,
         probe: &FEntryContext,
     ) -> Result<(), OsSanitizerError> {
-        let vm_flags = access_vm_flags(vma
-            .as_ref()
-            .ok_or(UnexpectedNull("VMA provided was null"))?);
+        let vm_flags = access_vm_flags(
+            vma.as_ref()
+                .ok_or(UnexpectedNull("VMA provided was null"))?,
+        );
 
         // if readable, writable, or executable
         if (vm_flags & 0x00000007) != 0 {
-            emit_fixed_mmap_report(probe, pid_tgid, protection, FixedMmapViolation::FixedMmapBadProt)?;
+            emit_fixed_mmap_report(
+                probe,
+                pid_tgid,
+                protection,
+                FixedMmapViolation::FixedMmapBadProt,
+            )?;
         }
 
         Ok(())
@@ -122,6 +136,9 @@ unsafe fn try_fentry_fixed_mmap(probe: &FEntryContext) -> Result<u32, OsSanitize
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(0);
     }
+    if FIXED_MMAP_SAFE_WRAPPED.get(&pid_tgid).is_some() {
+        return Ok(0);
+    }
 
     let addr: u64 = probe.arg(0);
     let protection: u64 = probe.arg(2);
@@ -146,18 +163,25 @@ unsafe fn try_fentry_fixed_mmap(probe: &FEntryContext) -> Result<u32, OsSanitize
             ) {
                 0 => {
                     return Ok(0); // we found the VMA and handled it appropriately
-                },
+                }
                 -2 => {
                     // no entry => MAP_FIXED was used without a preallocated region
                     // this is explicitly warned against in the man page
-                    emit_fixed_mmap_report(probe, pid_tgid, protection, FixedMmapViolation::FixedMmapUnmapped)?;
+                    emit_fixed_mmap_report(
+                        probe,
+                        pid_tgid,
+                        protection,
+                        FixedMmapViolation::FixedMmapUnmapped,
+                    )?;
                 }
-                e => return Err(CouldntFindVma(
-                    "couldn't find vma for template parameter",
-                    e,
-                    (pid_tgid >> 32) as u32,
-                    pid_tgid as u32,
-                )),
+                e => {
+                    return Err(CouldntFindVma(
+                        "couldn't find vma for template parameter",
+                        e,
+                        (pid_tgid >> 32) as u32,
+                        pid_tgid as u32,
+                    ))
+                }
             }
         } else {
             emit_fixed_mmap_report(probe, pid_tgid, protection, FixedMmapViolation::HintUsed)?;

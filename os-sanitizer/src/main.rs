@@ -31,7 +31,10 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio::{signal, task};
 
-use os_sanitizer_common::{CopyViolation, OpenViolation, OsSanitizerReport, SnprintfViolation, SERIALIZED_SIZE, FixedMmapViolation};
+use os_sanitizer_common::{
+    CopyViolation, FixedMmapViolation, OpenViolation, OsSanitizerReport, SnprintfViolation,
+    SERIALIZED_SIZE,
+};
 
 use crate::resolver::{ProcMap, ProcMapOffsetResolver};
 
@@ -194,10 +197,7 @@ struct Args {
         help = "Log violations of file pointer `_unlocked' functions being used on multiple threads"
     )]
     filep_unlocked: bool,
-    #[arg(
-        long,
-        help = "Log violations of mmap being used with fixed addresses"
-    )]
+    #[arg(long, help = "Log violations of mmap being used with fixed addresses")]
     fixed_mmap: bool,
 
     #[arg(long, help = "Enable all reporting strategies")]
@@ -798,6 +798,11 @@ async fn main() -> Result<(), anyhow::Error> {
 
     if args.fixed_mmap {
         attach_fentry!(bpf, btf, "ksys_mmap_pgoff", "fixed_mmap");
+        attach_uprobe_and_uretprobe!(
+            bpf,
+            "fixed_mmap_safe_function",
+            ["ld-linux-x86-64", "dl_main"]
+        );
     }
 
     signal::ctrl_c().await?;
