@@ -7,9 +7,9 @@ edition = "2021"
 anon-struct = []
 
 [dependencies]
-aya-bpf = { path = "../../aya/bpf/aya-bpf" }
-aya-bpf-macros = { path = "../../aya/aya-bpf-macros" }
-aya-log-ebpf = { path = "../../aya/bpf/aya-log-ebpf" }
+aya-bpf = { git = "https://github.com/aya-rs/aya.git" }
+aya-bpf-macros = { git = "https://github.com/aya-rs/aya.git" }
+aya-log-ebpf = { git = "https://github.com/aya-rs/aya.git" }
 os-sanitizer-common = { path = "../os-sanitizer-common" }
 paste = "1.0"
 

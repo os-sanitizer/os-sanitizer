@@ -4,11 +4,12 @@ use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK, task_struct};
 use aya_bpf::cty::{c_long, c_void};
 use aya_bpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
 use aya_bpf::helpers::gen::bpf_get_current_comm;
-use aya_bpf::programs::FEntryContext;
-use aya_bpf_macros::fentry;
+use aya_bpf::maps::LruHashMap;
+use aya_bpf::programs::{FEntryContext, ProbeContext};
+use aya_bpf_macros::{fentry, map, uprobe, uretprobe};
 
 use os_sanitizer_common::{EXECUTABLE_LEN, FixedMmapViolation, OsSanitizerError, OsSanitizerReport};
-use os_sanitizer_common::OsSanitizerError::{CouldntFindVma, CouldntGetComm, CouldntRecoverStack, UnexpectedNull};
+use os_sanitizer_common::OsSanitizerError::{CouldntFindVma, CouldntGetComm, CouldntRecoverStack, UnexpectedNull, Unreachable};
 
 use crate::{access_vm_flags, emit_report, IGNORED_PIDS, STACK_MAP};
 use crate::binding::vm_area_struct;
@@ -20,6 +21,33 @@ struct MmapFixedContext {
     pid_tgid: u64,
     protection: u64,
     probe: *const FEntryContext,
+}
+
+unsafe fn emit_fixed_mmap_report(probe: &FEntryContext, pid_tgid: u64, protection: u64, variant: FixedMmapViolation) -> Result<(), OsSanitizerError> {
+    let stack_id = STACK_MAP
+        .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
+        .map_err(|e| CouldntRecoverStack("fixed-mmap", e))?
+        as u64;
+
+    let mut executable = [0u8; EXECUTABLE_LEN];
+
+    // we do this manually because the existing implementation is restricted to 16 bytes
+    let res = bpf_get_current_comm(
+        executable.as_mut_ptr() as *mut c_void,
+        executable.len() as u32,
+    );
+    if res < 0 {
+        return Err(CouldntGetComm("fixed-mmap comm", res));
+    }
+
+    let report = OsSanitizerReport::FixedMmap {
+        executable,
+        pid_tgid,
+        stack_id,
+        protection,
+        variant
+    };
+    emit_report(probe, &report)
 }
 
 unsafe extern "C" fn mmap_fixed_callback(
@@ -40,30 +68,7 @@ unsafe extern "C" fn mmap_fixed_callback(
 
         // if readable, writable, or executable
         if (vm_flags & 0x00000007) != 0 {
-            let stack_id = STACK_MAP
-                .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-                .map_err(|e| CouldntRecoverStack("fixed-mmap", e))?
-                as u64;
-
-            let mut executable = [0u8; EXECUTABLE_LEN];
-
-            // we do this manually because the existing implementation is restricted to 16 bytes
-            let res = bpf_get_current_comm(
-                executable.as_mut_ptr() as *mut c_void,
-                executable.len() as u32,
-            );
-            if res < 0 {
-                return Err(CouldntGetComm("fixed-mmap comm", res));
-            }
-
-            let report = OsSanitizerReport::FixedMmap {
-                executable,
-                pid_tgid,
-                stack_id,
-                protection,
-                variant: FixedMmapViolation::FixedMmapBadProt
-            };
-            emit_report(probe, &report)?;
+            emit_fixed_mmap_report(probe, pid_tgid, protection, FixedMmapViolation::FixedMmapBadProt)?;
         }
 
         Ok(())
@@ -80,8 +85,31 @@ unsafe extern "C" fn mmap_fixed_callback(
     0
 }
 
+#[map]
+static FIXED_MMAP_SAFE_WRAPPED: LruHashMap<u64, u8> = LruHashMap::with_max_entries(1 << 16, 0);
+
+#[uprobe]
+fn uprobe_fixed_mmap_safe_function(probe: ProbeContext) -> u32 {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    match FIXED_MMAP_SAFE_WRAPPED.insert(&pid_tgid, &0, 0) {
+        Ok(_) => 0,
+        Err(_) => crate::emit_error(
+            &probe,
+            Unreachable("Couldn't insert into FIXED_MMAP_SAFE_WRAPPED"),
+            "uprobe_fixed_mmap_safe_function",
+        ),
+    }
+}
+
+#[uretprobe]
+fn uretprobe_fixed_mmap_safe_function(_probe: ProbeContext) -> u32 {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let _ = FIXED_MMAP_SAFE_WRAPPED.remove(&pid_tgid); // don't care if this fails
+    0
+}
+
 #[fentry(function = "ksys_mmap_pgoff")]
-pub fn fentry_fixed_mmap(probe: FEntryContext) -> u32 {
+fn fentry_fixed_mmap(probe: FEntryContext) -> u32 {
     match unsafe { try_fentry_fixed_mmap(&probe) } {
         Ok(res) => res,
         Err(e) => crate::emit_error(&probe, e, "os_sanitizer_fixed_mmap_fentry"),
@@ -107,7 +135,7 @@ unsafe fn try_fentry_fixed_mmap(probe: &FEntryContext) -> Result<u32, OsSanitize
         probe: probe as *const _,
     };
 
-    let report = if addr != 0 {
+    if addr != 0 {
         if flags & MAP_FIXED != 0 {
             match bpf_find_vma(
                 task_ptr,
@@ -122,29 +150,7 @@ unsafe fn try_fentry_fixed_mmap(probe: &FEntryContext) -> Result<u32, OsSanitize
                 -2 => {
                     // no entry => MAP_FIXED was used without a preallocated region
                     // this is explicitly warned against in the man page
-                    let stack_id = STACK_MAP
-                        .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-                        .map_err(|e| CouldntRecoverStack("fixed-mmap", e))?
-                        as u64;
-
-                    let mut executable = [0u8; EXECUTABLE_LEN];
-
-                    // we do this manually because the existing implementation is restricted to 16 bytes
-                    let res = bpf_get_current_comm(
-                        executable.as_mut_ptr() as *mut c_void,
-                        executable.len() as u32,
-                    );
-                    if res < 0 {
-                        return Err(CouldntGetComm("fixed-mmap comm", res));
-                    }
-
-                    Some(OsSanitizerReport::FixedMmap {
-                        executable,
-                        pid_tgid,
-                        stack_id,
-                        protection,
-                        variant: FixedMmapViolation::FixedMmapUnmapped
-                    })
+                    emit_fixed_mmap_report(probe, pid_tgid, protection, FixedMmapViolation::FixedMmapUnmapped)?;
                 }
                 e => return Err(CouldntFindVma(
                     "couldn't find vma for template parameter",
@@ -154,36 +160,8 @@ unsafe fn try_fentry_fixed_mmap(probe: &FEntryContext) -> Result<u32, OsSanitize
                 )),
             }
         } else {
-            let stack_id = STACK_MAP
-                .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-                .map_err(|e| CouldntRecoverStack("fixed-mmap", e))?
-                as u64;
-
-            let mut executable = [0u8; EXECUTABLE_LEN];
-
-            // we do this manually because the existing implementation is restricted to 16 bytes
-            let res = bpf_get_current_comm(
-                executable.as_mut_ptr() as *mut c_void,
-                executable.len() as u32,
-            );
-            if res < 0 {
-                return Err(CouldntGetComm("fixed-mmap comm", res));
-            }
-
-            Some(OsSanitizerReport::FixedMmap {
-                executable,
-                pid_tgid,
-                stack_id,
-                protection,
-                variant: FixedMmapViolation::HintUsed
-            })
+            emit_fixed_mmap_report(probe, pid_tgid, protection, FixedMmapViolation::HintUsed)?;
         }
-    } else {
-        None
-    };
-
-    if let Some(report) = report {
-        emit_report(probe, &report)?;
     }
 
     Ok(0)

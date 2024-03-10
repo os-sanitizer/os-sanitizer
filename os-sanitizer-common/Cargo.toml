@@ -8,8 +8,8 @@ default = []
 user = ["aya"]
 
 [dependencies]
-aya = { path = "../../aya/aya", optional = true }
-aya-bpf-cty = { path = "../../aya/bpf/aya-bpf-cty" }
+aya = { git = "https://github.com/aya-rs/aya.git", optional = true }
+aya-bpf-cty = { git = "https://github.com/aya-rs/aya.git" }
 enum-iterator = "1.4.1"
 
 [lib]

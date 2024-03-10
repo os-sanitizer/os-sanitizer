@@ -4,12 +4,9 @@
 
 1. Install clang (you need at least libclang.so) of your choice.
 2. Install Rust *nightly*: https://rustup.rs/
-3. Install bpf-linker from the `feature/fix-di` branch: `cargo install --git https://github.com/aya-rs/bpf-linker --branch feature/fix-di`
-4. Install `x86_64-unknown-linux-musl`: `rustup target add x86_64-unknown-linux-musl`
-5. Install `musl-gcc` for your system (e.g., for Ubuntu: `sudo apt install musl-tools`)
-6. Locally clone aya and apply the patch: `pushd ..; git clone https://github.com/aya-rs/aya.git; pushd aya; git apply ../os-sanitizer/aya.patch; popd; popd`
-7. Install `bpftool` for your system (e.g., for Ubuntu: `sudo apt install linux-tools-common`)
-8. Install `aya-tool`: `cargo install bindgen-cli; cargo install --path ../aya/aya-tool`
+3. Install bpf-linker from the `feature/fix-di` branch: `cargo install --force --git https://github.com/aya-rs/bpf-linker`
+4. Install `bpftool` for your system (e.g., for Ubuntu: `sudo apt install linux-tools-common`)
+5. Install `aya-tool`: `cargo install bindgen-cli; cargo install --path ../aya/aya-tool`
 
 ## Generate Bindings
 
