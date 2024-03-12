@@ -1,9 +1,9 @@
-use aya_bpf::bindings::{__u64, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
-use aya_bpf::cty::{c_void, uintptr_t};
-use aya_bpf::helpers::bpf_get_current_pid_tgid;
-use aya_bpf::helpers::gen::bpf_get_current_comm;
-use aya_bpf::programs::ProbeContext;
-use aya_bpf_macros::uprobe;
+use aya_ebpf::bindings::{__u64, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
+use aya_ebpf::cty::{c_void, uintptr_t};
+use aya_ebpf::helpers::bpf_get_current_pid_tgid;
+use aya_ebpf::helpers::gen::bpf_get_current_comm;
+use aya_ebpf::programs::ProbeContext;
+use aya_ebpf_macros::uprobe;
 
 use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, CouldntRecoverStack, Unreachable};
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};

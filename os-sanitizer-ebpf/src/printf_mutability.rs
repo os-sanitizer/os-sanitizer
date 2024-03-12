@@ -1,11 +1,11 @@
 use crate::binding::vm_area_struct;
 use crate::{access_vm_flags, emit_report, read_str, IGNORED_PIDS, STACK_MAP};
-use aya_bpf::bindings::{__u64, task_struct, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
-use aya_bpf::cty::{c_long, c_void, uintptr_t};
-use aya_bpf::helpers::gen::bpf_get_current_comm;
-use aya_bpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
-use aya_bpf::programs::ProbeContext;
-use aya_bpf_macros::uprobe;
+use aya_ebpf::bindings::{__u64, task_struct, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
+use aya_ebpf::cty::{c_long, c_void, uintptr_t};
+use aya_ebpf::helpers::gen::bpf_get_current_comm;
+use aya_ebpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
+use aya_ebpf::programs::ProbeContext;
+use aya_ebpf_macros::uprobe;
 use os_sanitizer_common::OsSanitizerError::{
     CouldntFindVma, CouldntGetComm, CouldntRecoverStack, UnexpectedNull, Unreachable,
 };

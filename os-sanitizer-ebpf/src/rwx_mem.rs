@@ -1,10 +1,10 @@
 use core::ffi::c_void;
 
-use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
-use aya_bpf::helpers::bpf_get_current_pid_tgid;
-use aya_bpf::helpers::gen::bpf_get_current_comm;
-use aya_bpf::programs::FEntryContext;
-use aya_bpf_macros::fentry;
+use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
+use aya_ebpf::helpers::bpf_get_current_pid_tgid;
+use aya_ebpf::helpers::gen::bpf_get_current_comm;
+use aya_ebpf::programs::FEntryContext;
+use aya_ebpf_macros::fentry;
 
 use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, CouldntRecoverStack, UnexpectedNull};
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};

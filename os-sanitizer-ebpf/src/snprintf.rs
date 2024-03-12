@@ -1,11 +1,11 @@
-use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
-use aya_bpf::cty::{c_int, c_void, size_t, uintptr_t};
-use aya_bpf::helpers::bpf_get_current_pid_tgid;
-use aya_bpf::helpers::gen::bpf_get_current_comm;
-use aya_bpf::maps::LruHashMap;
-use aya_bpf::programs::{FEntryContext, ProbeContext};
-use aya_bpf::BpfContext;
-use aya_bpf_macros::{fentry, map, uprobe, uretprobe};
+use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
+use aya_ebpf::cty::{c_int, c_void, size_t, uintptr_t};
+use aya_ebpf::helpers::bpf_get_current_pid_tgid;
+use aya_ebpf::helpers::gen::bpf_get_current_comm;
+use aya_ebpf::maps::LruHashMap;
+use aya_ebpf::programs::{FEntryContext, ProbeContext};
+use aya_ebpf::EbpfContext;
+use aya_ebpf_macros::{fentry, map, uprobe, uretprobe};
 
 use os_sanitizer_common::OsSanitizerError::{
     CouldntGetComm, CouldntRecoverStack, MissingArg, Unreachable,
@@ -120,7 +120,7 @@ unsafe fn try_uretprobe_snprintf(probe: &ProbeContext) -> Result<u32, OsSanitize
 }
 
 #[inline(always)]
-unsafe fn maybe_report_sprintf<C: BpfContext>(
+unsafe fn maybe_report_sprintf<C: EbpfContext>(
     ctx: &C,
     pid_tgid: u64,
     srcptr: uintptr_t,

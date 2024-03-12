@@ -1,9 +1,9 @@
 use crate::IGNORED_PIDS;
-use aya_bpf::cty::{size_t, uintptr_t};
-use aya_bpf::helpers::bpf_get_current_pid_tgid;
-use aya_bpf::maps::{HashMap, LruHashMap};
-use aya_bpf::programs::ProbeContext;
-use aya_bpf_macros::{map, uprobe, uretprobe};
+use aya_ebpf::cty::{size_t, uintptr_t};
+use aya_ebpf::helpers::bpf_get_current_pid_tgid;
+use aya_ebpf::maps::{HashMap, LruHashMap};
+use aya_ebpf::programs::ProbeContext;
+use aya_ebpf_macros::{map, uprobe, uretprobe};
 use os_sanitizer_common::OsSanitizerError;
 use os_sanitizer_common::OsSanitizerError::{OutOfSpace, Unreachable};
 

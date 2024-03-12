@@ -5,15 +5,15 @@
 use core::ffi::c_ulong;
 use core::hint::unreachable_unchecked;
 
-use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
-use aya_bpf::cty::{c_void, size_t, uintptr_t};
-use aya_bpf::helpers::bpf_get_current_pid_tgid;
-use aya_bpf::helpers::gen::{bpf_get_current_comm, bpf_probe_read_user_str};
-use aya_bpf::macros::map;
-use aya_bpf::macros::uprobe;
-use aya_bpf::maps::{HashMap, LruHashMap, PerCpuArray, PerfEventArray, StackTrace};
-use aya_bpf::programs::ProbeContext;
-use aya_bpf::{memset, BpfContext};
+use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
+use aya_ebpf::cty::{c_void, size_t, uintptr_t};
+use aya_ebpf::helpers::bpf_get_current_pid_tgid;
+use aya_ebpf::helpers::gen::{bpf_get_current_comm, bpf_probe_read_user_str};
+use aya_ebpf::macros::map;
+use aya_ebpf::macros::uprobe;
+use aya_ebpf::maps::{HashMap, LruHashMap, PerCpuArray, PerfEventArray, StackTrace};
+use aya_ebpf::programs::ProbeContext;
+use aya_ebpf::{memset, EbpfContext};
 use aya_log_ebpf::{error, info, log, warn, Level};
 
 use crate::binding::vm_area_struct;
@@ -64,7 +64,7 @@ pub static FUNCTION_REPORT_QUEUE: PerfEventArray<[u8; SERIALIZED_SIZE]> =
 pub static STACK_MAP: StackTrace = StackTrace::with_max_entries(1 << 20, 0);
 
 #[inline(always)]
-fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 {
+fn emit_error<C: EbpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 {
     match e {
         MissingArg(op, idx) => {
             error!(probe, "{}: Missing arg {} while handling {}", op, idx, name);
@@ -214,7 +214,7 @@ pub(crate) unsafe fn read_str(
 }
 
 #[inline(always)]
-pub(crate) unsafe fn emit_report<C: BpfContext>(
+pub(crate) unsafe fn emit_report<C: EbpfContext>(
     ctx: &C,
     report: &OsSanitizerReport,
 ) -> Result<(), OsSanitizerError> {

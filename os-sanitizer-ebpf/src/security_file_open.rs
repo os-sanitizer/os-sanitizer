@@ -1,11 +1,11 @@
 use crate::binding::file;
 use crate::{emit_report, FLAGGED_FILE_OPEN_PIDS, IGNORED_PIDS, STACK_MAP, STRING_SCRATCH};
-use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
-use aya_bpf::cty::{c_char, c_void, uintptr_t};
-use aya_bpf::helpers::gen::bpf_get_current_comm;
-use aya_bpf::helpers::{bpf_d_path, bpf_get_current_pid_tgid};
-use aya_bpf::programs::FEntryContext;
-use aya_bpf_macros::fentry;
+use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
+use aya_ebpf::cty::{c_char, c_void, uintptr_t};
+use aya_ebpf::helpers::gen::bpf_get_current_comm;
+use aya_ebpf::helpers::{bpf_d_path, bpf_get_current_pid_tgid};
+use aya_ebpf::programs::FEntryContext;
+use aya_ebpf_macros::fentry;
 use core::mem::offset_of;
 use os_sanitizer_common::OpenViolation::{Perms, Toctou};
 use os_sanitizer_common::OsSanitizerError::{
@@ -50,7 +50,7 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
     let path = data as uintptr_t + offset_of!(file, f_path);
 
     let res = bpf_d_path(
-        path as *mut aya_bpf::bindings::path,
+        path as *mut aya_ebpf::bindings::path,
         filename.as_mut_ptr() as *mut c_char,
         filename.len() as u32,
     );

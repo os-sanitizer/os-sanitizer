@@ -1,8 +1,8 @@
 use crate::ACCESS_MAP;
-use aya_bpf::cty::uintptr_t;
-use aya_bpf::helpers::bpf_get_current_pid_tgid;
-use aya_bpf::programs::FEntryContext;
-use aya_bpf_macros::fentry;
+use aya_ebpf::cty::uintptr_t;
+use aya_ebpf::helpers::bpf_get_current_pid_tgid;
+use aya_ebpf::programs::FEntryContext;
+use aya_ebpf_macros::fentry;
 use core::ffi::c_int;
 use os_sanitizer_common::OsSanitizerError;
 use os_sanitizer_common::OsSanitizerError::Unreachable;

@@ -1,11 +1,11 @@
 use crate::{emit_report, IGNORED_PIDS, STACK_MAP};
-use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
-use aya_bpf::cty::{c_void, uintptr_t};
-use aya_bpf::helpers::bpf_get_current_pid_tgid;
-use aya_bpf::helpers::gen::bpf_get_current_comm;
-use aya_bpf::maps::LruHashMap;
-use aya_bpf::programs::ProbeContext;
-use aya_bpf_macros::{map, uprobe, uretprobe};
+use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
+use aya_ebpf::cty::{c_void, uintptr_t};
+use aya_ebpf::helpers::bpf_get_current_pid_tgid;
+use aya_ebpf::helpers::gen::bpf_get_current_comm;
+use aya_ebpf::maps::LruHashMap;
+use aya_ebpf::programs::ProbeContext;
+use aya_ebpf_macros::{map, uprobe, uretprobe};
 use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, CouldntRecoverStack, Unreachable};
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
 

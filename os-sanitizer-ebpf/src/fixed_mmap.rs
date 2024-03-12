@@ -1,12 +1,12 @@
 use core::ffi::c_ulong;
 
-use aya_bpf::bindings::{task_struct, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
-use aya_bpf::cty::{c_long, c_void};
-use aya_bpf::helpers::gen::bpf_get_current_comm;
-use aya_bpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
-use aya_bpf::maps::LruHashMap;
-use aya_bpf::programs::{FEntryContext, ProbeContext};
-use aya_bpf_macros::{fentry, map, uprobe, uretprobe};
+use aya_ebpf::bindings::{task_struct, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
+use aya_ebpf::cty::{c_long, c_void};
+use aya_ebpf::helpers::gen::bpf_get_current_comm;
+use aya_ebpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
+use aya_ebpf::maps::LruHashMap;
+use aya_ebpf::programs::{FEntryContext, ProbeContext};
+use aya_ebpf_macros::{fentry, map, uprobe, uretprobe};
 
 use os_sanitizer_common::OsSanitizerError::{
     CouldntFindVma, CouldntGetComm, CouldntRecoverStack, UnexpectedNull, Unreachable,
