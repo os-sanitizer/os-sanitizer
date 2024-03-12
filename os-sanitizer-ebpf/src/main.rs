@@ -7,22 +7,24 @@ use core::hint::unreachable_unchecked;
 
 use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_void, size_t, uintptr_t};
-use aya_bpf::helpers::bpf_get_current_pid_tgid;
-use aya_bpf::helpers::gen::bpf_get_current_comm;
+use aya_bpf::helpers::gen::{bpf_get_current_comm, bpf_probe_read_user_str};
+use aya_bpf::helpers::{
+    bpf_get_current_pid_tgid, bpf_probe_read_user_buf, bpf_probe_read_user_str_bytes,
+};
 use aya_bpf::macros::map;
 use aya_bpf::macros::uprobe;
 use aya_bpf::maps::{HashMap, LruHashMap, PerCpuArray, PerfEventArray, StackTrace};
 use aya_bpf::programs::ProbeContext;
-use aya_bpf::BpfContext;
+use aya_bpf::{memset, BpfContext};
 use aya_log_ebpf::{debug, error, info, warn};
 
+use crate::binding::vm_area_struct;
 use os_sanitizer_common::CopyViolation::Strlen;
 use os_sanitizer_common::OsSanitizerError::*;
 use os_sanitizer_common::{
-    CopyViolation, OsSanitizerError, OsSanitizerReport, ToctouVariant, EXECUTABLE_LEN,
-    SERIALIZED_SIZE,
+    CopyViolation, MaybeOwnedArray, OsSanitizerError, OsSanitizerReport, ToctouVariant,
+    EXECUTABLE_LEN, SERIALIZED_SIZE, USERSTR_LEN,
 };
-use crate::binding::vm_area_struct;
 
 use crate::strlen::STRLEN_MAP;
 
@@ -34,6 +36,7 @@ mod binding;
 mod do_faccessat;
 mod do_statx;
 mod filep_unlocked;
+mod fixed_mmap;
 mod memcpy;
 mod printf_mutability;
 mod rwx_mem;
@@ -47,7 +50,6 @@ mod sys_openat2;
 mod system_absolute;
 mod system_mutability;
 mod vfs_fstatat;
-mod fixed_mmap;
 
 #[map(name = "IGNORED_PIDS")]
 pub static IGNORED_PIDS: HashMap<u32, u8> = HashMap::with_max_entries(1 << 12, 0);
@@ -58,10 +60,10 @@ pub static FLAGGED_FILE_OPEN_PIDS: LruHashMap<u64, ToctouVariant> =
 
 #[map(name = "FUNCTION_REPORT_QUEUE")]
 pub static FUNCTION_REPORT_QUEUE: PerfEventArray<[u8; SERIALIZED_SIZE]> =
-    PerfEventArray::with_max_entries(1 << 16, 0);
+    PerfEventArray::with_max_entries(1 << 20, 0);
 
 #[map(name = "STACKTRACES")]
-pub static STACK_MAP: StackTrace = StackTrace::with_max_entries(1 << 16, 0);
+pub static STACK_MAP: StackTrace = StackTrace::with_max_entries(1 << 20, 0);
 
 #[inline(always)]
 fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 {
@@ -79,21 +81,22 @@ fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 
                 name
             );
         }
-        CouldntReadUser(op, ptr, num_bytes) => {
+        CouldntReadUser(op, ptr, num_bytes, e) => {
             error!(
                 probe,
-                "{}: Couldn't read user address 0x{:x} ({} bytes) while handling {}",
+                "{}: Couldn't read user address 0x{:x} ({} bytes) while handling {} ({})",
                 op,
                 ptr,
                 num_bytes,
-                name
+                name,
+                e
             );
         }
         CouldntRecoverStack(op, errno) => {
             info!(probe, "{}: Couldn't recover stacktrace: {}", op, errno);
         }
         CouldntGetPath(op, errno) => {
-            debug!(probe, "{}: Couldn't recover path: {}", op, errno);
+            info!(probe, "{}: Couldn't recover path: {}", op, errno);
         }
         CouldntGetComm(op, errno) => {
             error!(probe, "{}: Couldn't recover comm: {}", op, errno);
@@ -178,6 +181,37 @@ unsafe fn try_check_bad_copy(
 
 #[map]
 pub static REPORT_SCRATCH: PerCpuArray<[u8; SERIALIZED_SIZE]> = PerCpuArray::with_max_entries(1, 0);
+#[map]
+pub static STRING_SCRATCH: PerCpuArray<[u8; USERSTR_LEN]> = PerCpuArray::with_max_entries(1, 0);
+
+#[inline(always)]
+pub(crate) unsafe fn read_str(
+    usermode_ptr: uintptr_t,
+    op: &'static str,
+) -> Result<MaybeOwnedArray<u8, USERSTR_LEN>, OsSanitizerError> {
+    let ptr = STRING_SCRATCH
+        .get_ptr_mut(0)
+        .ok_or(CouldntAccessBuffer("emit-report"))?;
+    let buf = &mut *ptr;
+    memset(buf.as_mut_ptr(), 0, buf.len());
+    let mut res = -1;
+    for _ in 0..32 {
+        res = bpf_probe_read_user_str(
+            buf.as_mut_ptr() as *mut c_void,
+            buf.len() as u32,
+            usermode_ptr as *const c_void,
+        );
+        if res >= 0 {
+            break;
+        }
+    }
+
+    if res < 0 {
+        Err(CouldntReadUser(op, usermode_ptr as u64, 0, res))
+    } else {
+        Ok(buf)
+    }
+}
 
 #[inline(always)]
 pub(crate) unsafe fn emit_report<C: BpfContext>(

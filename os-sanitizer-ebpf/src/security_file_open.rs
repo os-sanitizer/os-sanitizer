@@ -1,5 +1,5 @@
 use crate::binding::file;
-use crate::{emit_report, FLAGGED_FILE_OPEN_PIDS, IGNORED_PIDS, STACK_MAP};
+use crate::{emit_report, FLAGGED_FILE_OPEN_PIDS, IGNORED_PIDS, STACK_MAP, STRING_SCRATCH};
 use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_char, c_void, uintptr_t};
 use aya_bpf::helpers::gen::bpf_get_current_comm;
@@ -8,8 +8,10 @@ use aya_bpf::programs::FEntryContext;
 use aya_bpf_macros::fentry;
 use core::mem::offset_of;
 use os_sanitizer_common::OpenViolation::{Perms, Toctou};
-use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, CouldntGetPath, CouldntRecoverStack};
-use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN, FILENAME_LEN};
+use os_sanitizer_common::OsSanitizerError::{
+    CouldntAccessBuffer, CouldntGetComm, CouldntGetPath, CouldntRecoverStack,
+};
+use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
 
 #[fentry(function = "security_file_open")]
 fn fentry_security_file_open(probe: FEntryContext) -> u32 {
@@ -31,7 +33,7 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
     let inode = (*data).f_inode;
     let i_mode = (*inode).i_mode as u64;
 
-    let variant = if i_mode & 0b010 != 0 && i_mode & 0xF000 != 0xA000 {
+    let variant = if i_mode & 0b010 != 0 && i_mode & 0xF000 != 0xA000 && i_mode & 0x200 == 0 {
         Perms
     } else if let Some(&variant) = FLAGGED_FILE_OPEN_PIDS.get(&pid_tgid) {
         let _ = FLAGGED_FILE_OPEN_PIDS.remove(&pid_tgid); // maybe removed by race
@@ -41,7 +43,10 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
         return Ok(0);
     };
 
-    let mut filename = [0; FILENAME_LEN];
+    let ptr = STRING_SCRATCH
+        .get_ptr_mut(0)
+        .ok_or(CouldntAccessBuffer("emit-report"))?;
+    let filename = &mut *ptr;
     let path = data as uintptr_t + offset_of!(file, f_path);
 
     let res = bpf_d_path(

@@ -1,19 +1,16 @@
 use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_int, c_void, size_t, uintptr_t};
+use aya_bpf::helpers::bpf_get_current_pid_tgid;
 use aya_bpf::helpers::gen::bpf_get_current_comm;
-use aya_bpf::helpers::{bpf_get_current_pid_tgid, bpf_probe_read_user_buf};
 use aya_bpf::maps::LruHashMap;
 use aya_bpf::programs::{FEntryContext, ProbeContext};
 use aya_bpf::BpfContext;
 use aya_bpf_macros::{fentry, map, uprobe, uretprobe};
-use core::cmp::min;
 
 use os_sanitizer_common::OsSanitizerError::{
-    CouldntGetComm, CouldntReadUser, CouldntRecoverStack, MissingArg, Unreachable,
+    CouldntGetComm, CouldntRecoverStack, MissingArg, Unreachable,
 };
-use os_sanitizer_common::{
-    OsSanitizerError, OsSanitizerReport, SnprintfViolation, EXECUTABLE_LEN, WRITTEN_LEN,
-};
+use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, SnprintfViolation, EXECUTABLE_LEN};
 
 use crate::{emit_report, IGNORED_PIDS, STACK_MAP};
 
@@ -160,22 +157,6 @@ unsafe fn maybe_report_sprintf<C: BpfContext>(
             } else {
                 SnprintfViolation::PossibleLeak
             };
-
-            let mut written = [0; WRITTEN_LEN];
-            let user_read_amount = min(written.len(), count);
-            bpf_probe_read_user_buf(
-                srcptr as *const u8,
-                written
-                    .get_mut(..user_read_amount)
-                    .ok_or(Unreachable("bad length specified"))?,
-            )
-            .map_err(|_| {
-                CouldntReadUser(
-                    "snprintf -> write buf read",
-                    srcptr as u64,
-                    user_read_amount,
-                )
-            })?;
 
             let mut report = OsSanitizerReport::Snprintf {
                 executable,

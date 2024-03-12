@@ -1,15 +1,15 @@
 use crate::binding::vm_area_struct;
-use crate::{access_vm_flags, emit_report, IGNORED_PIDS, STACK_MAP};
+use crate::{access_vm_flags, emit_report, read_str, IGNORED_PIDS, STACK_MAP};
 use aya_bpf::bindings::{__u64, task_struct, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
-use aya_bpf::cty::{c_long, c_void};
-use aya_bpf::helpers::gen::{bpf_get_current_comm, bpf_probe_read_user_str};
+use aya_bpf::cty::{c_long, c_void, uintptr_t};
+use aya_bpf::helpers::gen::bpf_get_current_comm;
 use aya_bpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
 use aya_bpf::programs::ProbeContext;
 use aya_bpf_macros::uprobe;
 use os_sanitizer_common::OsSanitizerError::{
     CouldntFindVma, CouldntGetComm, CouldntRecoverStack, UnexpectedNull, Unreachable,
 };
-use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN, TEMPLATE_LEN};
+use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
 
 #[repr(C)]
 pub struct PrintfMutabilityContext {
@@ -53,12 +53,7 @@ unsafe extern "C" fn printf_mutability_callback(
                 return Err(CouldntGetComm("printf-mutability comm", res));
             }
 
-            let mut template = [0u8; TEMPLATE_LEN];
-            bpf_probe_read_user_str(
-                template.as_mut_ptr() as *mut c_void,
-                TEMPLATE_LEN as u32,
-                template_param as _,
-            );
+            let template = read_str(template_param as uintptr_t, "printf template")?;
 
             let report = OsSanitizerReport::PrintfMutability {
                 executable,

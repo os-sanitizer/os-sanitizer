@@ -1,7 +1,7 @@
 use crate::binding::vm_area_struct;
-use crate::{access_vm_flags, emit_report, IGNORED_PIDS, STACK_MAP};
+use crate::{access_vm_flags, emit_report, read_str, IGNORED_PIDS, STACK_MAP};
 use aya_bpf::bindings::{__u64, task_struct, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
-use aya_bpf::cty::{c_long, c_void};
+use aya_bpf::cty::{c_long, c_void, uintptr_t};
 use aya_bpf::helpers::gen::{bpf_get_current_comm, bpf_probe_read_user_str};
 use aya_bpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
 use aya_bpf::programs::ProbeContext;
@@ -9,7 +9,7 @@ use aya_bpf_macros::uprobe;
 use os_sanitizer_common::OsSanitizerError::{
     CouldntFindVma, CouldntGetComm, CouldntRecoverStack, UnexpectedNull, Unreachable,
 };
-use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN, TEMPLATE_LEN};
+use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
 
 #[repr(C)]
 struct SystemMutabilityContext {
@@ -30,9 +30,10 @@ unsafe extern "C" fn system_mutability_callback(
         command_param: u64,
         probe: &ProbeContext,
     ) -> Result<(), OsSanitizerError> {
-        let vm_flags = access_vm_flags(vma
-            .as_ref()
-            .ok_or(UnexpectedNull("VMA provided was null"))?);
+        let vm_flags = access_vm_flags(
+            vma.as_ref()
+                .ok_or(UnexpectedNull("VMA provided was null"))?,
+        );
 
         // if writable
         if (vm_flags & 0x00000002) != 0 {
@@ -52,12 +53,7 @@ unsafe extern "C" fn system_mutability_callback(
                 return Err(CouldntGetComm("system-mutability comm", res));
             }
 
-            let mut command = [0u8; TEMPLATE_LEN];
-            bpf_probe_read_user_str(
-                command.as_mut_ptr() as *mut c_void,
-                TEMPLATE_LEN as u32,
-                command_param as _,
-            );
+            let mut command = read_str(command_param as uintptr_t, "system command")?;
 
             let report = OsSanitizerReport::SystemMutability {
                 executable,

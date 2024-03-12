@@ -1,21 +1,25 @@
 #![cfg_attr(not(feature = "user"), no_std)]
 
+use core::ffi::c_long;
 #[cfg(feature = "user")]
 use core::mem::size_of;
 use core::mem::size_of_val;
 
 pub const EXECUTABLE_LEN: usize = 16;
-pub const WRITTEN_LEN: usize = 64;
-pub const FILENAME_LEN: usize = 64;
-pub const TEMPLATE_LEN: usize = 64;
+pub const USERSTR_LEN: usize = 1024;
 
-pub const SERIALIZED_SIZE: usize = 256;
+pub const SERIALIZED_SIZE: usize = 3192;
+
+#[cfg(not(feature = "user"))]
+pub type MaybeOwnedArray<T, const N: usize> = &'static [T; N];
+#[cfg(feature = "user")]
+pub type MaybeOwnedArray<T, const N: usize> = [T; N];
 
 #[repr(u32)]
 pub enum OsSanitizerError {
     MissingArg(&'static str, usize) = 1,
     CouldntReadKernel(&'static str, u64, usize),
-    CouldntReadUser(&'static str, u64, usize),
+    CouldntReadUser(&'static str, u64, usize, c_long),
     CouldntRecoverStack(&'static str, i64),
     CouldntGetPath(&'static str, i64),
     CouldntGetComm(&'static str, i64),
@@ -31,6 +35,7 @@ pub enum OsSanitizerError {
 }
 
 #[derive(Copy, Clone)]
+#[cfg_attr(feature = "user", derive(Debug))]
 pub enum ToctouVariant {
     Access,
     Stat,
@@ -49,18 +54,21 @@ impl std::fmt::Display for ToctouVariant {
 }
 
 #[derive(Copy, Clone)]
+#[cfg_attr(feature = "user", derive(Debug))]
 pub enum OpenViolation {
     Perms,
     Toctou(ToctouVariant),
 }
 
 #[derive(Copy, Clone)]
+#[cfg_attr(feature = "user", derive(Debug))]
 pub enum CopyViolation {
     Strlen,
     Malloc,
 }
 
 #[derive(Copy, Clone)]
+#[cfg_attr(feature = "user", derive(Debug))]
 pub enum FixedMmapViolation {
     HintUsed,
     FixedMmapUnmapped,
@@ -68,12 +76,14 @@ pub enum FixedMmapViolation {
 }
 
 #[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+#[cfg_attr(feature = "user", derive(Debug))]
 pub enum SnprintfViolation {
     PossibleLeak,
     DefiniteLeak,
 }
 
 #[derive(Copy, Clone)]
+#[cfg_attr(feature = "user", derive(Debug))]
 pub enum OsSanitizerReport {
     RwxVma {
         executable: [u8; EXECUTABLE_LEN],
@@ -87,21 +97,21 @@ pub enum OsSanitizerReport {
         pid_tgid: u64,
         stack_id: u64,
         template_param: u64,
-        template: [u8; TEMPLATE_LEN],
+        template: MaybeOwnedArray<u8, USERSTR_LEN>,
     },
     SystemMutability {
         executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,
         stack_id: u64,
         command_param: u64,
-        command: [u8; TEMPLATE_LEN],
+        command: MaybeOwnedArray<u8, USERSTR_LEN>,
     },
     SystemAbsolute {
         executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,
         stack_id: u64,
         command_param: u64,
-        command: [u8; TEMPLATE_LEN],
+        command: MaybeOwnedArray<u8, USERSTR_LEN>,
     },
     FilePointerLocking {
         executable: [u8; EXECUTABLE_LEN],
@@ -158,8 +168,16 @@ pub enum OsSanitizerReport {
         pid_tgid: u64,
         stack_id: u64,
         i_mode: u64,
-        filename: [u8; FILENAME_LEN],
+        filename: MaybeOwnedArray<u8, USERSTR_LEN>,
         variant: OpenViolation,
+    },
+    UncheckedOpen {
+        executable: [u8; EXECUTABLE_LEN],
+        pid_tgid: u64,
+        uid_gid: u64,
+        stack_id: u64,
+        dfd: i64,
+        filename: MaybeOwnedArray<u8, USERSTR_LEN>,
     },
     Access {
         executable: [u8; EXECUTABLE_LEN],
@@ -190,6 +208,14 @@ trait SerialisedContent {
         let mut buf = [0u8; size_of::<u64>()];
         let next = self.read(&mut buf)?;
         *content = u64::from_be_bytes(buf);
+        Ok(next)
+    }
+
+    #[cfg(feature = "user")]
+    fn read_i64(&mut self, content: &mut i64) -> Result<&mut Self, OsSanitizerError> {
+        let mut buf = [0u8; size_of::<i64>()];
+        let next = self.read(&mut buf)?;
+        *content = i64::from_be_bytes(buf);
         Ok(next)
     }
 }
@@ -225,6 +251,10 @@ impl SerialisedContent for [u8] {
 impl OsSanitizerReport {
     #[inline(always)]
     pub fn serialise_into(&self, buf: &mut [u8]) -> Result<(), OsSanitizerError> {
+        const _: () = assert!(
+            SERIALIZED_SIZE > 2 * core::mem::size_of::<OsSanitizerReport>(),
+            "The serialised size should have been larger than twice the report size!"
+        );
         let buf = buf.write(&[match self {
             OsSanitizerReport::RwxVma { .. } => 0u8,
             OsSanitizerReport::PrintfMutability { .. } => 1,
@@ -240,6 +270,7 @@ impl OsSanitizerReport {
             OsSanitizerReport::Access { .. } => 11,
             OsSanitizerReport::Gets { .. } => 12,
             OsSanitizerReport::FixedMmap { .. } => 13,
+            OsSanitizerReport::UncheckedOpen { .. } => 14,
         }])?;
         let buf = match self {
             OsSanitizerReport::RwxVma {
@@ -307,6 +338,12 @@ impl OsSanitizerReport {
                 stack_id,
                 ..
             }
+            | OsSanitizerReport::UncheckedOpen {
+                executable,
+                pid_tgid,
+                stack_id,
+                ..
+            }
             | OsSanitizerReport::Access {
                 executable,
                 pid_tgid,
@@ -336,7 +373,8 @@ impl OsSanitizerReport {
                 template,
                 ..
             } => {
-                buf.write(&template_param.to_be_bytes())?.write(template)?;
+                buf.write(&template_param.to_be_bytes())?
+                    .write(template.as_slice())?;
             }
             OsSanitizerReport::SystemMutability {
                 command_param,
@@ -348,7 +386,8 @@ impl OsSanitizerReport {
                 command,
                 ..
             } => {
-                buf.write(&command_param.to_be_bytes())?.write(command)?;
+                buf.write(&command_param.to_be_bytes())?
+                    .write(command.as_slice())?;
             }
             OsSanitizerReport::FilePointerLocking { .. } => {}
             OsSanitizerReport::Sprintf { dest, .. } => {
@@ -416,7 +455,9 @@ impl OsSanitizerReport {
                 variant,
                 ..
             } => {
-                let buf = buf.write(&i_mode.to_be_bytes())?.write(filename)?;
+                let buf = buf
+                    .write(&i_mode.to_be_bytes())?
+                    .write(filename.as_slice())?;
                 buf[0] = match variant {
                     OpenViolation::Perms => 0,
                     OpenViolation::Toctou(toctou) => match toctou {
@@ -425,6 +466,16 @@ impl OsSanitizerReport {
                         ToctouVariant::Statx => 3,
                     },
                 };
+            }
+            OsSanitizerReport::UncheckedOpen {
+                uid_gid,
+                dfd,
+                filename,
+                ..
+            } => {
+                buf.write(&uid_gid.to_be_bytes())?
+                    .write(&dfd.to_be_bytes())?
+                    .write(filename.as_slice())?;
             }
             OsSanitizerReport::Access { .. } => {}
             OsSanitizerReport::Gets { .. } => {}
@@ -475,7 +526,7 @@ impl TryFrom<[u8; SERIALIZED_SIZE]> for OsSanitizerReport {
             }
             1 => {
                 let mut template_param = 0;
-                let mut template = [0; TEMPLATE_LEN];
+                let mut template = [0; USERSTR_LEN];
                 value.read_u64(&mut template_param)?.read(&mut template)?;
                 OsSanitizerReport::PrintfMutability {
                     executable,
@@ -487,7 +538,7 @@ impl TryFrom<[u8; SERIALIZED_SIZE]> for OsSanitizerReport {
             }
             2 => {
                 let mut command_param = 0;
-                let mut command = [0; TEMPLATE_LEN];
+                let mut command = [0; USERSTR_LEN];
                 value.read_u64(&mut command_param)?.read(&mut command)?;
                 OsSanitizerReport::SystemMutability {
                     executable,
@@ -499,7 +550,7 @@ impl TryFrom<[u8; SERIALIZED_SIZE]> for OsSanitizerReport {
             }
             3 => {
                 let mut command_param = 0;
-                let mut command = [0; TEMPLATE_LEN];
+                let mut command = [0; USERSTR_LEN];
                 value.read_u64(&mut command_param)?.read(&mut command)?;
                 OsSanitizerReport::SystemAbsolute {
                     executable,
@@ -622,7 +673,7 @@ impl TryFrom<[u8; SERIALIZED_SIZE]> for OsSanitizerReport {
             }
             10 => {
                 let mut i_mode = 0;
-                let mut filename = [0; FILENAME_LEN];
+                let mut filename = [0; USERSTR_LEN];
                 let value = value.read_u64(&mut i_mode)?.read(&mut filename)?;
                 let variant = match value[0] {
                     0 => OpenViolation::Perms,
@@ -665,6 +716,23 @@ impl TryFrom<[u8; SERIALIZED_SIZE]> for OsSanitizerReport {
                     stack_id,
                     protection,
                     variant,
+                }
+            }
+            14 => {
+                let mut uid_gid = 0;
+                let mut dfd = 0;
+                let mut filename = [0u8; USERSTR_LEN];
+                value
+                    .read_u64(&mut uid_gid)?
+                    .read_i64(&mut dfd)?
+                    .read(&mut filename)?;
+                OsSanitizerReport::UncheckedOpen {
+                    executable,
+                    pid_tgid,
+                    uid_gid,
+                    stack_id,
+                    dfd,
+                    filename,
                 }
             }
             _ => {

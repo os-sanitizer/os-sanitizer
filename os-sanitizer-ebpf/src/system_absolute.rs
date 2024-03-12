@@ -1,14 +1,14 @@
 use aya_bpf::bindings::{__u64, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
-use aya_bpf::cty::c_void;
+use aya_bpf::cty::{c_void, uintptr_t};
 use aya_bpf::helpers::bpf_get_current_pid_tgid;
 use aya_bpf::helpers::gen::{bpf_get_current_comm, bpf_probe_read_user_str};
 use aya_bpf::programs::ProbeContext;
 use aya_bpf_macros::uprobe;
 
 use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, CouldntRecoverStack, Unreachable};
-use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN, TEMPLATE_LEN};
+use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
 
-use crate::{emit_report, IGNORED_PIDS, STACK_MAP};
+use crate::{emit_report, read_str, IGNORED_PIDS, STACK_MAP};
 
 #[inline(always)]
 unsafe fn check_system_absolute(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
@@ -22,12 +22,7 @@ unsafe fn check_system_absolute(probe: &ProbeContext) -> Result<u32, OsSanitizer
         .arg(0)
         .ok_or(Unreachable("system-like has a template parameter"))?;
 
-    let mut command = [0u8; TEMPLATE_LEN];
-    bpf_probe_read_user_str(
-        command.as_mut_ptr() as *mut c_void,
-        TEMPLATE_LEN as u32,
-        command_param as _,
-    );
+    let command = read_str(command_param as uintptr_t, "system command")?;
 
     if !command.trim_ascii_start().starts_with(b"/") {
         let stack_id = STACK_MAP
