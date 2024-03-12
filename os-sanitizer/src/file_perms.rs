@@ -183,14 +183,3 @@ pub async fn check_ownership<P: AsRef<Path>>(
 
     violations
 }
-
-#[cfg(test)]
-mod test {
-    use std::path::PathBuf;
-
-    #[test]
-    fn path_witchcraft() {
-        let path = PathBuf::from("/a/b/c/d");
-        let up_to_a = PathBuf::from_iter(path.components().take(2));
-    }
-}

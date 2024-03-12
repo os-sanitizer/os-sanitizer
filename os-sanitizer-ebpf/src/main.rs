@@ -7,16 +7,14 @@ use core::hint::unreachable_unchecked;
 
 use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_void, size_t, uintptr_t};
+use aya_bpf::helpers::bpf_get_current_pid_tgid;
 use aya_bpf::helpers::gen::{bpf_get_current_comm, bpf_probe_read_user_str};
-use aya_bpf::helpers::{
-    bpf_get_current_pid_tgid, bpf_probe_read_user_buf, bpf_probe_read_user_str_bytes,
-};
 use aya_bpf::macros::map;
 use aya_bpf::macros::uprobe;
 use aya_bpf::maps::{HashMap, LruHashMap, PerCpuArray, PerfEventArray, StackTrace};
 use aya_bpf::programs::ProbeContext;
 use aya_bpf::{memset, BpfContext};
-use aya_log_ebpf::{debug, error, info, warn};
+use aya_log_ebpf::{error, info, log, warn, Level};
 
 use crate::binding::vm_area_struct;
 use os_sanitizer_common::CopyViolation::Strlen;
@@ -82,8 +80,10 @@ fn emit_error<C: BpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32 
             );
         }
         CouldntReadUser(op, ptr, num_bytes, e) => {
-            error!(
+            let level = if e == -14 { Level::Debug } else { Level::Error };
+            log!(
                 probe,
+                level,
                 "{}: Couldn't read user address 0x{:x} ({} bytes) while handling {} ({})",
                 op,
                 ptr,

@@ -3,9 +3,7 @@ use core::ffi::c_int;
 use aya_bpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_void, uintptr_t};
 use aya_bpf::helpers::gen::bpf_get_current_comm;
-use aya_bpf::helpers::{
-    bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_probe_read_user_str_bytes,
-};
+use aya_bpf::helpers::{bpf_get_current_pid_tgid, bpf_get_current_uid_gid};
 use aya_bpf::programs::FEntryContext;
 use aya_bpf_macros::fentry;
 
@@ -42,7 +40,7 @@ unsafe fn try_fentry_do_sys_openat2(ctx: &FEntryContext) -> Result<u32, OsSaniti
             .map_err(|_| Unreachable("map insertion failure"))?;
     }
 
-    let mut filename = read_str(usermode_ptr, "openat filename")?;
+    let filename = read_str(usermode_ptr, "openat filename")?;
 
     let mut executable = [0; EXECUTABLE_LEN];
 

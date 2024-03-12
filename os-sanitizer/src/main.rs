@@ -150,7 +150,7 @@ macro_rules! attach_uprobe_and_uretprobe {
 struct Args {
     #[arg(
         long,
-        help = "Log violations related to the use of `access' (`faccessat' and related syscalls)"
+        help = "Log violations related to the accessing of files (TOCTOU)"
     )]
     access: bool,
     #[arg(long, help = "Log all uses of the `gets' function")]

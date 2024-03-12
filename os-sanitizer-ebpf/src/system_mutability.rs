@@ -1,15 +1,17 @@
-use crate::binding::vm_area_struct;
-use crate::{access_vm_flags, emit_report, read_str, IGNORED_PIDS, STACK_MAP};
 use aya_bpf::bindings::{__u64, task_struct, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_long, c_void, uintptr_t};
-use aya_bpf::helpers::gen::{bpf_get_current_comm, bpf_probe_read_user_str};
+use aya_bpf::helpers::gen::bpf_get_current_comm;
 use aya_bpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
 use aya_bpf::programs::ProbeContext;
 use aya_bpf_macros::uprobe;
+
 use os_sanitizer_common::OsSanitizerError::{
     CouldntFindVma, CouldntGetComm, CouldntRecoverStack, UnexpectedNull, Unreachable,
 };
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
+
+use crate::binding::vm_area_struct;
+use crate::{access_vm_flags, emit_report, read_str, IGNORED_PIDS, STACK_MAP};
 
 #[repr(C)]
 struct SystemMutabilityContext {
@@ -53,7 +55,7 @@ unsafe extern "C" fn system_mutability_callback(
                 return Err(CouldntGetComm("system-mutability comm", res));
             }
 
-            let mut command = read_str(command_param as uintptr_t, "system command")?;
+            let command = read_str(command_param as uintptr_t, "system command")?;
 
             let report = OsSanitizerReport::SystemMutability {
                 executable,

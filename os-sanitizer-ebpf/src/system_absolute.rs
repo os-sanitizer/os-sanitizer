@@ -1,7 +1,7 @@
 use aya_bpf::bindings::{__u64, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_bpf::cty::{c_void, uintptr_t};
 use aya_bpf::helpers::bpf_get_current_pid_tgid;
-use aya_bpf::helpers::gen::{bpf_get_current_comm, bpf_probe_read_user_str};
+use aya_bpf::helpers::gen::bpf_get_current_comm;
 use aya_bpf::programs::ProbeContext;
 use aya_bpf_macros::uprobe;
 
