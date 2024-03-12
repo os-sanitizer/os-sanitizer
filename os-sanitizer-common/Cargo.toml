@@ -9,7 +9,7 @@ user = ["aya"]
 
 [dependencies]
 aya = { git = "https://github.com/aya-rs/aya.git", optional = true }
-aya-bpf-cty = { git = "https://github.com/aya-rs/aya.git" }
+aya-ebpf-cty = { git = "https://github.com/aya-rs/aya.git" }
 enum-iterator = "1.4.1"
 
 [lib]
