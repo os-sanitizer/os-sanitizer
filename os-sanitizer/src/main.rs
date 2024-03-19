@@ -17,9 +17,9 @@ use aya::{
     maps::{AsyncPerfEventArray, HashMap as AyaHashMap, StackTraceMap},
     programs::FEntry,
     util::online_cpus,
-    Bpf, Btf,
+    Btf, Ebpf,
 };
-use aya_log::BpfLogger;
+use aya_log::EbpfLogger;
 use bytes::BytesMut;
 use clap::{CommandFactory, Parser};
 use cpp_demangle::DemangleOptions;
@@ -275,10 +275,10 @@ async fn main() -> Result<(), anyhow::Error> {
         debug!("remove limit on locked memory failed, ret is: {}", ret);
     }
 
-    let mut bpf = Bpf::load(include_bytes_aligned!(
+    let mut bpf = Ebpf::load(include_bytes_aligned!(
         "../../target/bpfel-unknown-none/release/os-sanitizer"
     ))?;
-    if let Err(e) = BpfLogger::init(&mut bpf) {
+    if let Err(e) = EbpfLogger::init(&mut bpf) {
         // This can happen if you remove all log statements from your eBPF program.
         warn!("failed to initialize eBPF logger: {}", e);
     }
@@ -311,13 +311,13 @@ async fn main() -> Result<(), anyhow::Error> {
             let keep_going = keep_going.clone();
             tasks.push(task::spawn(async move {
                 let mut buffers = (0..32)
-                    .map(|_| BytesMut::with_capacity(512))
+                    .map(|_| BytesMut::with_capacity(SERIALIZED_SIZE))
                     .collect::<Vec<_>>();
 
                 while keep_going.load(Ordering::Relaxed) {
                     let events = buf.read_events(&mut buffers).await.unwrap();
                     for buf in buffers.iter_mut().take(events.read) {
-                        let report = unsafe { (buf.as_ptr() as *const [u8; SERIALIZED_SIZE]).read_unaligned() };
+                        let report = buf.iter().as_slice();
                         let Ok(report) = OsSanitizerReport::try_from(report) else {
                             warn!("Failed to deserialise a report.");
                             continue;
@@ -695,6 +695,14 @@ async fn main() -> Result<(), anyhow::Error> {
             ["libicuuc", "ures_getByKey_72"],
             ["libicuuc", "ures_getByKeyWithFallback_72"],
             ["libicuuc", "ures_getNextResource_72"],
+            ["libicui18n", "ucol_open_73"],
+            ["libicuuc", "ubrk_open_73"],
+            ["libicuuc", "uloc_getDisplayName_73"],
+            ["libicuuc", "uloc_getTableStringWithFallback_73"],
+            ["libicuuc", "ures_getByIndex_73"],
+            ["libicuuc", "ures_getByKey_73"],
+            ["libicuuc", "ures_getByKeyWithFallback_73"],
+            ["libicuuc", "ures_getNextResource_73"],
             [
                 "libicuuc",
                 "_ZN6icu_726Locale15setKeywordValueENS_11StringPieceES1_R10UErrorCode"
@@ -702,6 +710,14 @@ async fn main() -> Result<(), anyhow::Error> {
             [
                 "libicuuc",
                 "_ZN6icu_726Locale15setKeywordValueEPKcS2_R10UErrorCode"
+            ],
+            [
+                "libicuuc",
+                "_ZN6icu_736Locale15setKeywordValueENS_11StringPieceES1_R10UErrorCode"
+            ],
+            [
+                "libicuuc",
+                "_ZN6icu_736Locale15setKeywordValueEPKcS2_R10UErrorCode"
             ],
             [
                 "/usr/lib64/security/pam_gnome_keyring.so",

@@ -200,11 +200,11 @@ pub enum OsSanitizerReport {
 
 trait SerialisedContent {
     #[cfg(feature = "user")]
-    fn read(&mut self, content: &mut [u8]) -> Result<&mut Self, OsSanitizerError>;
+    fn read(&self, content: &mut [u8]) -> Result<&Self, OsSanitizerError>;
     fn write(&mut self, content: &[u8]) -> Result<&mut Self, OsSanitizerError>;
 
     #[cfg(feature = "user")]
-    fn read_u64(&mut self, content: &mut u64) -> Result<&mut Self, OsSanitizerError> {
+    fn read_u64(&self, content: &mut u64) -> Result<&Self, OsSanitizerError> {
         let mut buf = [0u8; size_of::<u64>()];
         let next = self.read(&mut buf)?;
         *content = u64::from_be_bytes(buf);
@@ -212,7 +212,7 @@ trait SerialisedContent {
     }
 
     #[cfg(feature = "user")]
-    fn read_i64(&mut self, content: &mut i64) -> Result<&mut Self, OsSanitizerError> {
+    fn read_i64(&self, content: &mut i64) -> Result<&Self, OsSanitizerError> {
         let mut buf = [0u8; size_of::<i64>()];
         let next = self.read(&mut buf)?;
         *content = i64::from_be_bytes(buf);
@@ -222,12 +222,12 @@ trait SerialisedContent {
 
 impl SerialisedContent for [u8] {
     #[cfg(feature = "user")]
-    fn read(&mut self, content: &mut [u8]) -> Result<&mut Self, OsSanitizerError> {
+    fn read(&self, content: &mut [u8]) -> Result<&Self, OsSanitizerError> {
         content
-            .copy_from_slice(self.get_mut(..content.len()).ok_or({
+            .copy_from_slice(self.get(..content.len()).ok_or({
                 OsSanitizerError::SerialisationError("not enough space to serialise")
             })?);
-        self.get_mut(content.len()..).ok_or({
+        self.get(content.len()..).ok_or({
             OsSanitizerError::SerialisationError("not enough space to continue serialising")
         })
     }
@@ -497,13 +497,12 @@ impl OsSanitizerReport {
 }
 
 #[cfg(feature = "user")]
-impl TryFrom<[u8; SERIALIZED_SIZE]> for OsSanitizerReport {
+impl TryFrom<&[u8]> for OsSanitizerReport {
     type Error = OsSanitizerError;
 
-    fn try_from(mut value: [u8; SERIALIZED_SIZE]) -> Result<Self, Self::Error> {
-        let value = &mut value;
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         let discriminant = value[0];
-        let value = &mut value[1..];
+        let value = &value[1..];
         let mut executable = [0u8; EXECUTABLE_LEN];
         let mut pid_tgid = 0;
         let mut stack_id = 0;
@@ -591,7 +590,7 @@ impl TryFrom<[u8; SERIALIZED_SIZE]> for OsSanitizerReport {
                     0 => SnprintfViolation::PossibleLeak,
                     _ => unreachable!(),
                 };
-                let value = &mut value[1..];
+                let value = &value[1..];
                 value.read_u64(&mut index)?;
                 OsSanitizerReport::Snprintf {
                     executable,
