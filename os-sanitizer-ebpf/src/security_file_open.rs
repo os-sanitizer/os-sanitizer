@@ -35,10 +35,10 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
 
     let variant = if i_mode & 0b010 != 0 && i_mode & 0xF000 != 0xA000 && i_mode & 0x200 == 0 {
         Perms
-    } else if let Some(&variant) = FLAGGED_FILE_OPEN_PIDS.get(&pid_tgid) {
+    } else if let Some(&(variant, stack_id)) = FLAGGED_FILE_OPEN_PIDS.get(&pid_tgid) {
         let _ = FLAGGED_FILE_OPEN_PIDS.remove(&pid_tgid); // maybe removed by race
 
-        Toctou(variant)
+        Toctou(variant, stack_id)
     } else {
         return Ok(0);
     };

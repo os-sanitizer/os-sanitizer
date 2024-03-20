@@ -26,6 +26,8 @@ use os_sanitizer_common::{
 
 use crate::strlen::STRLEN_MAP;
 
+pub(crate) type Hasher = rustc_hash::FxHasher;
+
 #[link_section = "license"]
 pub static LICENSE: [u8; 4] = *b"GPL\0";
 
@@ -53,7 +55,7 @@ mod vfs_fstatat;
 pub static IGNORED_PIDS: HashMap<u32, u8> = HashMap::with_max_entries(1 << 12, 0);
 
 #[map]
-pub static FLAGGED_FILE_OPEN_PIDS: LruHashMap<u64, ToctouVariant> =
+pub static FLAGGED_FILE_OPEN_PIDS: LruHashMap<u64, (ToctouVariant, u64)> =
     LruHashMap::with_max_entries(1 << 12, 0);
 
 #[map(name = "FUNCTION_REPORT_QUEUE")]
@@ -160,7 +162,7 @@ fn emit_error<C: EbpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32
 }
 
 #[map]
-static ACCESS_MAP: LruHashMap<(u64, u64, u64), ToctouVariant> =
+static ACCESS_MAP: LruHashMap<(u64, u64, u64), (ToctouVariant, u64)> =
     LruHashMap::with_max_entries(1 << 16, 0);
 
 #[inline(always)]

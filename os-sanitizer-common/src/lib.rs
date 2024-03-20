@@ -36,6 +36,7 @@ pub enum OsSanitizerError {
 
 #[derive(Copy, Clone)]
 #[cfg_attr(feature = "user", derive(Debug))]
+#[repr(u64)]
 pub enum ToctouVariant {
     Access,
     Stat,
@@ -57,7 +58,7 @@ impl std::fmt::Display for ToctouVariant {
 #[cfg_attr(feature = "user", derive(Debug))]
 pub enum OpenViolation {
     Perms,
-    Toctou(ToctouVariant),
+    Toctou(ToctouVariant, u64),
 }
 
 #[derive(Copy, Clone)]
@@ -128,12 +129,12 @@ pub enum OsSanitizerReport {
         executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,
         stack_id: u64,
+        second_stack_id: u64,
         srcptr: u64,
         size: u64,
         computed: u64,
         count: u64,
         kind: SnprintfViolation,
-        index: u64,
     },
     Strcpy {
         executable: [u8; EXECUTABLE_LEN],
@@ -399,7 +400,7 @@ impl OsSanitizerReport {
                 computed,
                 count,
                 kind,
-                index,
+                second_stack_id,
                 ..
             } => {
                 let buf = buf
@@ -412,7 +413,7 @@ impl OsSanitizerReport {
                     SnprintfViolation::PossibleLeak => 0,
                 };
                 let buf = &mut buf[1..];
-                buf.write(&index.to_be_bytes())?;
+                buf.write(&second_stack_id.to_be_bytes())?;
             }
             OsSanitizerReport::Strcpy {
                 dest,
@@ -458,13 +459,16 @@ impl OsSanitizerReport {
                 let buf = buf
                     .write(&i_mode.to_be_bytes())?
                     .write(filename.as_slice())?;
-                buf[0] = match variant {
-                    OpenViolation::Perms => 0,
-                    OpenViolation::Toctou(toctou) => match toctou {
-                        ToctouVariant::Access => 1,
-                        ToctouVariant::Stat => 2,
-                        ToctouVariant::Statx => 3,
-                    },
+                match variant {
+                    OpenViolation::Perms => buf[0] = 0,
+                    OpenViolation::Toctou(toctou, stack_id) => {
+                        buf[0] = match toctou {
+                            ToctouVariant::Access => 1,
+                            ToctouVariant::Stat => 2,
+                            ToctouVariant::Statx => 3,
+                        };
+                        buf[1..].write(&stack_id.to_be_bytes())?;
+                    }
                 };
             }
             OsSanitizerReport::UncheckedOpen {
@@ -579,7 +583,7 @@ impl TryFrom<&[u8]> for OsSanitizerReport {
                 let mut size = 0;
                 let mut computed = 0;
                 let mut count = 0;
-                let mut index = 0;
+                let mut second_stack_id = 0;
                 let value = value
                     .read_u64(&mut srcptr)?
                     .read_u64(&mut size)?
@@ -591,17 +595,17 @@ impl TryFrom<&[u8]> for OsSanitizerReport {
                     _ => unreachable!(),
                 };
                 let value = &value[1..];
-                value.read_u64(&mut index)?;
+                value.read_u64(&mut second_stack_id)?;
                 OsSanitizerReport::Snprintf {
                     executable,
                     pid_tgid,
                     stack_id,
+                    second_stack_id,
                     srcptr,
                     size,
                     computed,
                     count,
                     kind,
-                    index,
                 }
             }
             7 => {
@@ -676,9 +680,21 @@ impl TryFrom<&[u8]> for OsSanitizerReport {
                 let value = value.read_u64(&mut i_mode)?.read(&mut filename)?;
                 let variant = match value[0] {
                     0 => OpenViolation::Perms,
-                    1 => OpenViolation::Toctou(ToctouVariant::Access),
-                    2 => OpenViolation::Toctou(ToctouVariant::Stat),
-                    3 => OpenViolation::Toctou(ToctouVariant::Statx),
+                    1 => OpenViolation::Toctou(ToctouVariant::Access, {
+                        let mut v = 0;
+                        value[1..].read_u64(&mut v)?;
+                        v
+                    }),
+                    2 => OpenViolation::Toctou(ToctouVariant::Stat, {
+                        let mut v = 0;
+                        value[1..].read_u64(&mut v)?;
+                        v
+                    }),
+                    3 => OpenViolation::Toctou(ToctouVariant::Statx, {
+                        let mut v = 0;
+                        value[1..].read_u64(&mut v)?;
+                        v
+                    }),
                     _ => unreachable!(),
                 };
                 OsSanitizerReport::Open {

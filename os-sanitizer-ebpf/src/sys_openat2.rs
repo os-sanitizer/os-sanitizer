@@ -1,4 +1,5 @@
 use core::ffi::c_int;
+use core::hash::{Hash, Hasher};
 
 use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_ebpf::cty::{c_void, uintptr_t};
@@ -34,13 +35,16 @@ unsafe fn try_fentry_do_sys_openat2(ctx: &FEntryContext) -> Result<u32, OsSaniti
     let dfd: c_int = ctx.arg(0);
     let usermode_ptr: uintptr_t = ctx.arg(1);
 
-    if let Some(&variant) = ACCESS_MAP.get(&(pid_tgid, dfd as u64, usermode_ptr as u64)) {
+    let filename = read_str(usermode_ptr, "openat-filename")?;
+    let mut hasher = crate::Hasher::default();
+    filename.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    if let Some(&access) = ACCESS_MAP.get(&(pid_tgid, dfd as u64, hash)) {
         FLAGGED_FILE_OPEN_PIDS
-            .insert(&pid_tgid, &variant, 0)
+            .insert(&pid_tgid, &access, 0)
             .map_err(|_| Unreachable("map insertion failure"))?;
     }
-
-    let filename = read_str(usermode_ptr, "openat filename")?;
 
     let mut executable = [0; EXECUTABLE_LEN];
 

@@ -1,12 +1,14 @@
 use crate::binding::filename;
-use crate::ACCESS_MAP;
+use crate::{read_str, ACCESS_MAP, STACK_MAP};
+use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_ebpf::cty::uintptr_t;
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::programs::FEntryContext;
 use aya_ebpf_macros::fentry;
 use core::ffi::c_int;
+use core::hash::{Hash, Hasher};
 use os_sanitizer_common::OsSanitizerError;
-use os_sanitizer_common::OsSanitizerError::Unreachable;
+use os_sanitizer_common::OsSanitizerError::{CouldntRecoverStack, Unreachable};
 use os_sanitizer_common::ToctouVariant::Statx;
 
 #[fentry(function = "do_statx")]
@@ -26,8 +28,17 @@ unsafe fn try_fentry_do_statx(ctx: &FEntryContext) -> Result<u32, OsSanitizerErr
     if !filename_ptr.is_null() {
         let usermode_ptr = (*filename_ptr).uptr as uintptr_t;
 
+        let filename = read_str(usermode_ptr, "statx-filename")?;
+        let mut hasher = crate::Hasher::default();
+        filename.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        let stack_id = STACK_MAP
+            .get_stackid(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
+            .map_err(|e| CouldntRecoverStack("filep-unlocked", e))? as u64;
+
         ACCESS_MAP
-            .insert(&(pid_tgid, dfd as u64, usermode_ptr as u64), &Statx, 0)
+            .insert(&(pid_tgid, dfd as u64, hash), &(Statx, stack_id), 0)
             .map_err(|_| Unreachable("map insertion failure"))?;
     }
 

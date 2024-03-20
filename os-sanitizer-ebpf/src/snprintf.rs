@@ -158,32 +158,22 @@ unsafe fn maybe_report_sprintf<C: EbpfContext>(
                 SnprintfViolation::PossibleLeak
             };
 
-            let mut report = OsSanitizerReport::Snprintf {
-                executable,
-                pid_tgid,
-                stack_id,
-                srcptr: srcptr as u64,
-                size: size as u64,
-                computed: computed as u64,
-                count: count as u64,
-                kind,
-                index: 1,
-            };
-
-            emit_report(ctx, &report)?;
-
             let second_stack_id = STACK_MAP
                 .get_stackid(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
                 .map_err(|e| CouldntRecoverStack("printf-mutability", e))?
                 as u64;
 
-            if let OsSanitizerReport::Snprintf {
-                stack_id, index, ..
-            } = &mut report
-            {
-                *stack_id = second_stack_id;
-                *index = 2;
-            }
+            let report = OsSanitizerReport::Snprintf {
+                executable,
+                pid_tgid,
+                stack_id,
+                second_stack_id,
+                srcptr: srcptr as u64,
+                size: size as u64,
+                computed: computed as u64,
+                count: count as u64,
+                kind,
+            };
 
             emit_report(ctx, &report)?;
         }

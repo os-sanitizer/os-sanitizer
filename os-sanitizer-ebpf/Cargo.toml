@@ -10,6 +10,7 @@ anon-struct = []
 aya-ebpf = { git = "https://github.com/aya-rs/aya.git" }
 aya-ebpf-macros = { git = "https://github.com/aya-rs/aya.git" }
 aya-log-ebpf = { git = "https://github.com/aya-rs/aya.git" }
+rustc-hash = { version = "1.1", default-features = false }
 os-sanitizer-common = { path = "../os-sanitizer-common" }
 paste = "1.0"
 

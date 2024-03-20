@@ -322,36 +322,37 @@ async fn main() -> Result<(), anyhow::Error> {
                             warn!("Failed to deserialise a report.");
                             continue;
                         };
-                        let (executable, pid, tgid, stacktrace) = match report {
-                            OsSanitizerReport::PrintfMutability { executable, pid_tgid, stack_id, .. }
-                            | OsSanitizerReport::SystemMutability { executable, pid_tgid, stack_id, .. }
-                            | OsSanitizerReport::SystemAbsolute { executable, pid_tgid, stack_id, .. }
-                            | OsSanitizerReport::FilePointerLocking { executable, pid_tgid, stack_id, .. }
-                            | OsSanitizerReport::Snprintf { executable, pid_tgid, stack_id, .. }
-                            | OsSanitizerReport::Sprintf { executable, pid_tgid, stack_id, .. }
-                            | OsSanitizerReport::Strcpy { executable, pid_tgid, stack_id, .. }
-                            | OsSanitizerReport::Strncpy { executable, pid_tgid, stack_id, .. }
-                            | OsSanitizerReport::Memcpy { executable, pid_tgid, stack_id, .. }
-                            | OsSanitizerReport::Open { executable, pid_tgid, stack_id, .. }
-                            | OsSanitizerReport::UncheckedOpen { executable, pid_tgid, stack_id, .. }
-                            | OsSanitizerReport::Access { executable, pid_tgid, stack_id, .. }
-                            | OsSanitizerReport::Gets { executable, pid_tgid, stack_id, .. }
-                            | OsSanitizerReport::RwxVma { executable, pid_tgid, stack_id, .. }
-                            | OsSanitizerReport::FixedMmap { executable, pid_tgid, stack_id, .. }
-                            => {
-                                let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
-                                    warn!("Couldn't recover the name of an executable.");
-                                    return;
-                                };
-                                let Ok(stacktrace) = stacktraces.get(&(stack_id as u32), 0) else {
-                                    warn!("Couldn't recover the stacktrace of the executable {executable}.");
-                                    return;
-                                };
-                                (executable.to_string(), (pid_tgid >> 32) as u32, pid_tgid as u32, stacktrace)
-                            },
-                        };
+                        let stacktraces = stacktraces.clone();
                         let cached_procmaps = cached_procmaps.clone();
                         task::spawn(async move {
+                            let (executable, pid, tgid, stacktrace) = match report {
+                                OsSanitizerReport::PrintfMutability { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::SystemMutability { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::SystemAbsolute { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::FilePointerLocking { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::Snprintf { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::Sprintf { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::Strcpy { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::Strncpy { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::Memcpy { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::Open { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::UncheckedOpen { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::Access { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::Gets { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::RwxVma { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::FixedMmap { executable, pid_tgid, stack_id, .. }
+                                => {
+                                    let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
+                                        warn!("Couldn't recover the name of an executable.");
+                                        return;
+                                    };
+                                    let Ok(stacktrace) = stacktraces.get(&(stack_id as u32), 0) else {
+                                        warn!("Couldn't recover the stacktrace of the executable {executable}.");
+                                        return;
+                                    };
+                                    (executable.to_string(), (pid_tgid >> 32) as u32, pid_tgid as u32, stacktrace)
+                                },
+                            };
                             let procmap = {
                                 if let Ok(procmap) = ProcMap::new(pid as pid_t).map(Arc::new) {
                                     // update!
@@ -375,13 +376,16 @@ async fn main() -> Result<(), anyhow::Error> {
                                 }
                             };
 
+                            // not actually allocated unless we give an element
+                            let mut extra_stacktraces = Vec::new();
+
                             let context = if pid == tgid {
                                 format!("{executable} (pid: {pid})")
                             } else {
                                 format!("{executable} (pid: {pid}, thread: {tgid})")
                             };
 
-                            let (message, level, index) = match report {
+                            let (message, level) = match report {
                                 OsSanitizerReport::PrintfMutability { template_param, template, .. } => {
                                     if let Ok(template) = unsafe {
                                         CStr::from_ptr(template.as_ptr() as *const c_char).to_str()
@@ -401,60 +405,65 @@ async fn main() -> Result<(), anyhow::Error> {
                                         {
                                             return;
                                         }
-                                        (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}: {template}"), Level::Warn, 0)
+                                        (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}: {template}"), Level::Warn)
                                     } else {
-                                        (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}, but the template was not string-like"), Level::Warn, 0)
+                                        (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}, but the template was not string-like"), Level::Warn)
                                     }
                                 }
                                 OsSanitizerReport::SystemMutability { command_param, command, .. } => {
                                     if let Ok(command) = unsafe {
                                         CStr::from_ptr(command.as_ptr() as *const c_char).to_str()
                                     } {
-                                        (format!("{context} invoked system with a non-constant command string located at 0x{command_param:x}: {command}"), Level::Warn, 0)
+                                        (format!("{context} invoked system with a non-constant command string located at 0x{command_param:x}: {command}"), Level::Warn)
                                     } else {
-                                        (format!("{context} invoked system with a non-constant command string located at 0x{command_param:x}, but the command was not string-like"), Level::Warn, 0)
+                                        (format!("{context} invoked system with a non-constant command string located at 0x{command_param:x}, but the command was not string-like"), Level::Warn)
                                     }
                                 }
                                 OsSanitizerReport::SystemAbsolute { command_param, command, .. } => {
                                     if let Ok(command) = unsafe {
                                         CStr::from_ptr(command.as_ptr() as *const c_char).to_str()
                                     } {
-                                        (format!("{context} invoked system with a non-absolute command string located at 0x{command_param:x}: {command}"), Level::Warn, 0)
+                                        (format!("{context} invoked system with a non-absolute command string located at 0x{command_param:x}: {command}"), Level::Warn)
                                     } else {
-                                        (format!("{context} invoked system with a non-absolute command string located at 0x{command_param:x}, but the command was not string-like"), Level::Warn, 0)
+                                        (format!("{context} invoked system with a non-absolute command string located at 0x{command_param:x}, but the command was not string-like"), Level::Warn)
                                     }
                                 }
                                 OsSanitizerReport::FilePointerLocking { .. } => {
-                                    (format!("{context} invoked a FILE* function with unlocked in another thread from a usage of another FILE* function"), Level::Warn, 0)
+                                    (format!("{context} invoked a FILE* function with unlocked in another thread from a usage of another FILE* function"), Level::Warn)
                                 }
-                                OsSanitizerReport::Snprintf { srcptr, size, computed, count, kind, index, .. } => {
+                                OsSanitizerReport::Snprintf { srcptr, size, computed, count, kind, second_stack_id, .. } => {
                                     let warning_string = if kind == SnprintfViolation::DefiniteLeak {
                                         "which exceeded the originally specified length"
                                     } else {
                                         "which might leak"
                                     };
-                                    (format!("{context} invoked a write syscall of an snprintf-constructed string ({srcptr:#x}) using the computed length from snprintf, {warning_string} (wrote {count}, computed {computed}, restricted size {size})"), Level::Warn, index)
+                                    let Ok(stacktrace) = stacktraces.get(&(second_stack_id as u32), 0) else {
+                                        warn!("Couldn't recover the stacktrace of the executable {executable}.");
+                                        return;
+                                    };
+                                    extra_stacktraces.push(stacktrace);
+                                    (format!("{context} invoked a write syscall of an snprintf-constructed string ({srcptr:#x}) using the computed length from snprintf, {warning_string} (wrote {count}, computed {computed}, restricted size {size})"), Level::Warn)
                                 }
                                 OsSanitizerReport::Sprintf { dest, .. } => {
-                                    (format!("{context} invoked sprintf with stack dest pointer (dest: 0x{dest:x})"), Level::Warn, 0)
+                                    (format!("{context} invoked sprintf with stack dest pointer (dest: 0x{dest:x})"), Level::Warn)
                                 }
                                 OsSanitizerReport::Strcpy { len_checked: true, dest, src, .. } => {
-                                    (format!("{context} invoked strcpy with stack dest pointer with a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Info, 0)
+                                    (format!("{context} invoked strcpy with stack dest pointer with a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Info)
                                 }
                                 OsSanitizerReport::Strcpy { len_checked: false, dest, src, .. } => {
-                                    (format!("{context} invoked strcpy with stack dest pointer without a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Warn, 0)
+                                    (format!("{context} invoked strcpy with stack dest pointer without a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Warn)
                                 }
                                 OsSanitizerReport::Strncpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
-                                    (format!("{context} invoked strncpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info, 0)
+                                    (format!("{context} invoked strncpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info)
                                 }
                                 OsSanitizerReport::Strncpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
-                                    (format!("{context} invoked strncpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn, 0)
+                                    (format!("{context} invoked strncpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn)
                                 }
                                 OsSanitizerReport::Memcpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
-                                    (format!("{context} invoked memcpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info, 0)
+                                    (format!("{context} invoked memcpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info)
                                 }
                                 OsSanitizerReport::Memcpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
-                                    (format!("{context} invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn, 0)
+                                    (format!("{context} invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn)
                                 }
                                 OsSanitizerReport::Open { i_mode, filename, variant, .. } => {
                                     if executable == "ls" {
@@ -508,13 +517,18 @@ async fn main() -> Result<(), anyhow::Error> {
                                                 } else {
                                                     Level::Warn
                                                 };
-                                                (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), level, 0)
+                                                (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), level)
                                             } else {
-                                                (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), Level::Info, 0)
+                                                (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), Level::Info)
                                             }
                                         }
-                                        OpenViolation::Toctou(variant) => {
-                                            (format!("{context} opened `{filename}' (a {filetype}) after accessing it via {variant}, a known TOCTOU pattern"), Level::Info, 0)
+                                        OpenViolation::Toctou(variant, second_stack_id) => {
+                                            let Ok(stacktrace) = stacktraces.get(&(second_stack_id as u32), 0) else {
+                                                warn!("Couldn't recover the stacktrace of the executable {executable}.");
+                                                return;
+                                            };
+                                            extra_stacktraces.push(stacktrace);
+                                            (format!("{context} opened `{filename}' (a {filetype}) after accessing it via {variant}, a known TOCTOU pattern"), Level::Info)
                                         }
                                     }
                                 }
@@ -576,31 +590,31 @@ async fn main() -> Result<(), anyhow::Error> {
                                     } else {
                                         Level::Warn
                                     };
-                                    (format!("{context}, acting as uid {uid} and gid {gid}, invoked open on a file which could be intercepted at the following points:\n{violations_formatted}"), level, 0)
+                                    (format!("{context}, acting as uid {uid} and gid {gid}, invoked open on a file which could be intercepted at the following points:\n{violations_formatted}"), level)
                                 }
                                 OsSanitizerReport::Access { .. } => {
-                                    (format!("{context} invoked access, which is a syscall wrapper explicitly warned against"), Level::Info, 0)
+                                    (format!("{context} invoked access, which is a syscall wrapper explicitly warned against"), Level::Info)
                                 }
                                 OsSanitizerReport::Gets { .. } => {
-                                    (format!("{context} invoked gets, which is incredibly stupid"), Level::Error, 0)
+                                    (format!("{context} invoked gets, which is incredibly stupid"), Level::Error)
                                 }
                                 OsSanitizerReport::RwxVma { start, end, .. } => {
-                                    (format!("{context} updated a memory region at {start:#x}-{end:#x} to be simultaneously writable and executable"), Level::Warn, 0)
+                                    (format!("{context} updated a memory region at {start:#x}-{end:#x} to be simultaneously writable and executable"), Level::Warn)
                                 }
                                 OsSanitizerReport::FixedMmap { protection, variant, .. } => {
                                     match variant {
                                         FixedMmapViolation::HintUsed => {
                                             if protection & PROT_EXEC as u64 != 0 {
-                                                (format!("{context} attempted to map an executable memory region at a fixed address"), Level::Warn, 0)
+                                                (format!("{context} attempted to map an executable memory region at a fixed address"), Level::Warn)
                                             } else {
-                                                (format!("{context} attempted to map an non-executable memory region at a fixed address"), Level::Info, 0)
+                                                (format!("{context} attempted to map an non-executable memory region at a fixed address"), Level::Info)
                                             }
                                         }
                                         FixedMmapViolation::FixedMmapUnmapped => {
-                                            (format!("{context} mapped a memory region with MAP_FIXED without preallocating at the same region"), Level::Warn, 0)
+                                            (format!("{context} mapped a memory region with MAP_FIXED without preallocating at the same region"), Level::Warn)
                                         }
                                         FixedMmapViolation::FixedMmapBadProt => {
-                                            (format!("{context} mapped a memory region with MAP_FIXED on a memory region which was allocated with non-zero protections"), Level::Info, 0)
+                                            (format!("{context} mapped a memory region with MAP_FIXED on a memory region which was allocated with non-zero protections"), Level::Info)
                                         }
                                     }
                                 }
@@ -611,53 +625,56 @@ async fn main() -> Result<(), anyhow::Error> {
                                 procmap.as_ref().map(|procmap| ProcMapOffsetResolver::from(procmap.as_ref()));
 
                             let frame_iter = if let Some(resolver) = maybe_resolver.as_ref() {
-                                Either::Left(stacktrace.frames().iter().enumerate().map(|(i, frame)| {
-                                    resolver.resolve_file_offset(frame.ip).map_or_else(
-                                        || format!("#{i} 0x{:x}", frame.ip),
-                                        move |(path, offset)| {
-                                            if let Some(path) = path.to_str() {
-                                                format!("#{i} 0x{:x}  ({path}+0x{offset:x})", frame.ip)
-                                            } else {
-                                                format!(
-                                                    "#{i} 0x{:x}  {}+0x{offset:x} (name adjusted for utf-8 compat)",
-                                                    frame.ip,
-                                                    path.to_string_lossy()
-                                                )
-                                            }
-                                        },
-                                    )
+                                Either::Left(stacktrace.frames().iter().enumerate().chain(extra_stacktraces.iter().flat_map(|s| s.frames().iter().enumerate())).flat_map(|(i, frame)| {
+                                    if i > visibility_depth {
+                                        None
+                                    } else if i == visibility_depth {
+                                        Some(Cow::from("..."))
+                                    } else {
+                                        let spacing = if i == 0 { "\n" } else { "" };
+                                        Some(Cow::from(resolver.resolve_file_offset(frame.ip).map_or_else(
+                                            || format!("{spacing}#{i} 0x{:x}", frame.ip),
+                                            move |(path, offset)| {
+                                                if let Some(path) = path.to_str() {
+                                                    format!("{spacing}#{i} 0x{:x}  ({path}+0x{offset:x})", frame.ip)
+                                                } else {
+                                                    format!(
+                                                        "{spacing}#{i} 0x{:x}  {}+0x{offset:x} (name adjusted for utf-8 compat)",
+                                                        frame.ip,
+                                                        path.to_string_lossy()
+                                                    )
+                                                }
+                                            },
+                                        )))
+                                    }
                                 }))
                             } else {
                                 Either::Right(
                                     stacktrace
                                         .frames()
                                         .iter()
-                                        .enumerate()
-                                        .map(|(i, frame)| format!("#{i} 0x{:x}", frame.ip)),
+                                        .enumerate().chain(extra_stacktraces.iter().flat_map(|s| s.frames().iter().enumerate()))
+                                        .flat_map(|(i, frame)| {
+                                            if i > visibility_depth {
+                                                None
+                                            } else if i == visibility_depth {
+                                                Some(Cow::from("..."))
+                                            } else {
+                                                let spacing = if i == 0 { "\n" } else { "" };
+                                                Some(Cow::from(format!("{spacing}#{i} 0x{:x}", frame.ip)))
+                                            }
+                                        }),
                                 )
                             };
 
                             let stacktrace = frame_iter
-                                .enumerate()
-                                .take_while(|(i, _)| *i <= visibility_depth)
-                                .map(|(i, s)| {
-                                    if i == visibility_depth {
-                                        "...".to_string()
-                                    } else {
-                                        s
-                                    }
-                                })
                                 .collect::<Vec<_>>();
 
                             // since we can't follow these stacktraces, best skip them
                             // let level = if stacktrace.len() <= 2 { Level::Info } else { level };
 
                             let stacktrace = stacktrace.join("\n");
-                            if index == 0 {
-                                log!(level, "{message}; stacktrace:\n{stacktrace}");
-                            } else {
-                                log!(level, "{message}; stacktrace {index}:\n{stacktrace}");
-                            }
+                            log!(level, "{message}; stacktrace:{stacktrace}");
                         });
                     }
                 }
