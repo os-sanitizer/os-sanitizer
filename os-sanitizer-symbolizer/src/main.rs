@@ -1,26 +1,60 @@
-use either::Either;
-use regex::bytes::RegexBuilder;
 use std::borrow::Cow;
 use std::collections::HashSet;
-use std::future::{ready, Future};
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
+use regex::bytes::RegexBuilder;
+use serde::{Deserialize, Deserializer, Serialize};
 use tokio::fs;
-use tokio::io::{stdin, stdout, AsyncReadExt, AsyncWriteExt};
-use tokio::process::Command;
-use wholesym::{
-    Error, FrameDebugInfo, FramesLookupResult, SymbolManager, SymbolManagerConfig, SymbolMap,
-};
+use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{ChildStdin, ChildStdout, Command};
 
-pub struct FileOffsetResolver {
-    mapping: SymbolMap,
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct LLVMAddrSymbol {
+    #[serde(deserialize_with = "non_zero")]
+    column: Option<u64>,
+    #[serde(deserialize_with = "non_empty")]
+    file_name: Option<String>,
+    #[serde(deserialize_with = "non_empty")]
+    function_name: Option<String>,
+    #[serde(deserialize_with = "non_zero")]
+    line: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct LLVMAddrEntry {
+    #[serde(default)]
+    symbol: Vec<LLVMAddrSymbol>,
+}
+
+fn non_zero<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v: u64 = Deserialize::deserialize(deserializer)?;
+    Ok((v != 0).then_some(v))
+}
+
+fn non_empty<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v: &str = Deserialize::deserialize(deserializer)?;
+    Ok((!v.is_empty()).then(|| v.to_string()))
+}
+
+struct FileOffsetResolver {
+    symbolizer_in: ChildStdin,
+    symbolizer_out: BufReader<ChildStdout>,
     path: PathBuf,
 }
 
 impl FileOffsetResolver {
-    async fn new<P: AsRef<Path>>(manager: &SymbolManager, path: P) -> Result<Self, Error> {
+    async fn new<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
         {
             let mut stdout = stdout();
             stdout.write_all(b"Applying debuginfo for ").await.unwrap();
@@ -30,59 +64,54 @@ impl FileOffsetResolver {
                 .unwrap();
             stdout.write_u8(b'\n').await.unwrap();
         }
-        let _ = Command::new("debuginfod-find")
-            .arg("debuginfo")
+        let mut symbolizer = Command::new("llvm-symbolizer")
+            .args([
+                "--debuginfod",
+                "--demangle",
+                "--inlines",
+                "--relative-address",
+                "--output-style=JSON",
+                "-e",
+            ])
             .arg(path.as_ref().as_os_str())
-            //            .stdout(Stdio::null())
-            .status()
-            .await;
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .stdin(Stdio::piped())
+            .spawn()?;
+        let symbolizer_in = symbolizer.stdin.take().unwrap();
+        let symbolizer_out = symbolizer.stdout.take().unwrap();
+        let symbolizer_out = BufReader::new(symbolizer_out);
 
-        let mapping = manager
-            .load_symbol_map_for_binary_at_path(path.as_ref(), None)
-            .await?;
         Ok(Self {
-            mapping,
+            symbolizer_in,
+            symbolizer_out,
             path: path.as_ref().to_path_buf(),
         })
     }
 
-    fn resolve_symbol<'a>(
-        &'a self,
-        manager: &'a SymbolManager,
-        addr: u64,
-    ) -> impl Future<Output = Option<Vec<FrameDebugInfo>>> + 'a {
+    async fn resolve_symbol(&mut self, addr: u64) -> Vec<LLVMAddrSymbol> {
         // avoid looking up private directories
-        if self.path.is_absolute() && !self.path.starts_with("/home") {
-            if let Some(info) = self.mapping.lookup_offset(addr) {
-                match info.frames {
-                    FramesLookupResult::Available(frames) => {
-                        return Either::Left(ready(Some(frames)))
+        if self.path.is_absolute() {
+            if self
+                .symbolizer_in
+                .write_all(format!("{:#x}\n", addr).as_bytes())
+                .await
+                .is_ok()
+            {
+                let mut line = String::new();
+                if self.symbolizer_out.read_line(&mut line).await.is_ok() {
+                    if let Ok(entry) = serde_json::from_str::<LLVMAddrEntry>(&line) {
+                        return entry.symbol;
                     }
-                    FramesLookupResult::External(ext) => {
-                        let origin = self.mapping.symbol_file_origin();
-                        return Either::Right(async move {
-                            manager.lookup_external(&origin, &ext).await
-                        });
-                    }
-                    FramesLookupResult::Unavailable => {}
                 }
             }
         }
-        Either::Left(ready(None))
+        Vec::new()
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    let mut config = SymbolManagerConfig::default().use_debuginfod(true);
-
-    if let Some(home) = std::env::var_os("HOME") {
-        let cache = Path::new(&home).join(".cache/debuginfod_client");
-        config = SymbolManagerConfig::default()
-            .use_debuginfod(true)
-            .debuginfod_cache_dir_if_not_installed(cache);
-    }
-
     let re = RegexBuilder::new(r"^(.+?) \((\/.*)\+0x([0-9a-f]+)\)\s*(?:\(BuildId:.+)?$")
         .multi_line(true)
         .build()
@@ -143,44 +172,36 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut transformed = Vec::new();
 
     for path in observed_paths {
-        let manager = SymbolManager::with_config(config.clone());
-        if let Ok(resolver) = FileOffsetResolver::new(&manager, path).await {
+        if let Ok(mut resolver) = FileOffsetResolver::new(path).await {
             for &(i, prefix, actual, _, offset) in requiring_transform
                 .iter()
                 .filter(|(_, _, _, entry_path, _)| *entry_path == path)
             {
-                if let Some(frames) = resolver
-                    .resolve_symbol(&manager, offset)
-                    .await
-                    .and_then(|frames| (!frames.is_empty()).then_some(frames))
-                {
+                let frames = resolver.resolve_symbol(offset).await;
+                if !frames.is_empty() {
                     for (inline, frame) in frames.into_iter().rev().enumerate().rev() {
                         let mut completed = Vec::from(prefix);
                         if inline != 0 {
                             write!(&mut completed, "inlined ")?;
                         }
 
-                        if let Some(f) = frame.function.as_ref() {
+                        if let Some(f) = frame.function_name.as_ref() {
                             write!(&mut completed, "in {f}")?;
+                            match &frame {
+                                LLVMAddrSymbol {
+                                    file_name: Some(file_path),
+                                    line: Some(line_number),
+                                    ..
+                                } => write!(&mut completed, " {}:{line_number}", file_path)?,
+                                LLVMAddrSymbol {
+                                    file_name: Some(file_path),
+                                    ..
+                                } => write!(&mut completed, " {}", file_path)?,
+                                _ => write!(&mut completed, " ({path}+0x{offset:x})")?,
+                            };
                         } else {
                             write!(&mut completed, " ({path}+0x{offset:x})")?;
                         }
-                        match &frame {
-                            FrameDebugInfo {
-                                file_path: Some(file_path),
-                                line_number: Some(line_number),
-                                ..
-                            } => write!(
-                                &mut completed,
-                                " {}:{line_number}",
-                                file_path.display_path()
-                            )?,
-                            FrameDebugInfo {
-                                file_path: Some(file_path),
-                                ..
-                            } => write!(&mut completed, " {}", file_path.display_path())?,
-                            _ => {}
-                        };
 
                         transformed.push((i, Cow::from(completed)))
                     }
