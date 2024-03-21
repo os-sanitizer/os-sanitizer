@@ -466,10 +466,6 @@ async fn main() -> Result<(), anyhow::Error> {
                                     (format!("{context} invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn)
                                 }
                                 OsSanitizerReport::Open { i_mode, filename, variant, .. } => {
-                                    if executable == "ls" {
-                                        return;
-                                    }
-
                                     let Ok(filename) = (unsafe {
                                         CStr::from_ptr(filename.as_ptr() as *const c_char).to_str()
                                     }) else {

