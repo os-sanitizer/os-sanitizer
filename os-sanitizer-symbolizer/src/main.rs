@@ -5,11 +5,21 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use clap::Parser;
 use regex::bytes::RegexBuilder;
 use serde::{Deserialize, Deserializer, Serialize};
-use tokio::fs;
+use tokio::fs::File;
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
+
+#[derive(Parser, Debug)]
+#[clap(version, about, long_about = None)]
+struct Args {
+    #[arg(long, help = "Disable demangling in symbolized output")]
+    no_demangle: bool,
+    #[arg(help = "The files to read, or none if reading from stdin")]
+    files: Vec<String>,
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -54,7 +64,7 @@ struct FileOffsetResolver {
 }
 
 impl FileOffsetResolver {
-    async fn new<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
+    async fn new<P: AsRef<Path>>(path: P, demangle: bool) -> Result<Self, std::io::Error> {
         {
             let mut stdout = stdout();
             stdout.write_all(b"Applying debuginfo for ").await.unwrap();
@@ -69,10 +79,14 @@ impl FileOffsetResolver {
         } else {
             Command::new("llvm-symbolizer")
         };
+        if demangle {
+            cmd.arg("--demangle");
+        } else {
+            cmd.arg("--no-demangle");
+        }
         let mut symbolizer = cmd
             .args([
                 "--debuginfod",
-                "--demangle",
                 "--inlines",
                 "--relative-address",
                 "--output-style=JSON",
@@ -118,13 +132,21 @@ impl FileOffsetResolver {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+    env_logger::init();
+    let args = Args::parse();
+
     let re = RegexBuilder::new(r"^(.+?) \((\/.*)\+0x([0-9a-f]+)\)\s*(?:\(BuildId:.+)?$")
         .multi_line(true)
         .build()
         .expect("This is a valid regex.");
 
-    let source = if let Some(filename) = std::env::args_os().nth(1) {
-        fs::read(filename).await?
+    let source = if !args.files.is_empty() {
+        let mut combined = Vec::new();
+        for filename in args.files {
+            let mut file = File::open(filename).await?;
+            file.read_to_end(&mut combined).await?;
+        }
+        combined
     } else {
         let mut source = Vec::new();
         stdin().read_to_end(&mut source).await?;
@@ -178,7 +200,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut transformed = Vec::new();
 
     for path in observed_paths {
-        if let Ok(mut resolver) = FileOffsetResolver::new(path).await {
+        if let Ok(mut resolver) = FileOffsetResolver::new(path, !args.no_demangle).await {
             for &(i, prefix, actual, _, offset) in requiring_transform
                 .iter()
                 .filter(|(_, _, _, entry_path, _)| *entry_path == path)

@@ -176,7 +176,7 @@ unsafe fn try_fentry_fixed_mmap(probe: &FEntryContext) -> Result<u32, OsSanitize
                 }
                 e => {
                     return Err(CouldntFindVma(
-                        "couldn't find vma for template parameter",
+                        "couldn't find vma for fixed address",
                         e,
                         (pid_tgid >> 32) as u32,
                         pid_tgid as u32,

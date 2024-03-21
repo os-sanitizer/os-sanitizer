@@ -900,7 +900,8 @@ async fn main() -> Result<(), anyhow::Error> {
         attach_uprobe_and_uretprobe!(
             bpf,
             "fixed_mmap_safe_function",
-            ["ld-linux-x86-64", "dl_main"]
+            ["ld-linux-x86-64", "_dl_map_object"],
+            ["libc", "alloc_new_heap"]
         );
     }
 
