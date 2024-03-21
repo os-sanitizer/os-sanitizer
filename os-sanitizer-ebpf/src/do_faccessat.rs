@@ -1,17 +1,16 @@
 use core::ffi::c_int;
 use core::hash::{Hash, Hasher};
 
-use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_ebpf::cty::uintptr_t;
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::programs::FEntryContext;
 use aya_ebpf_macros::fentry;
 
 use os_sanitizer_common::OsSanitizerError;
-use os_sanitizer_common::OsSanitizerError::{CouldntRecoverStack, Unreachable};
+use os_sanitizer_common::OsSanitizerError::Unreachable;
 use os_sanitizer_common::ToctouVariant::Access;
 
-use crate::{read_str, ACCESS_MAP, STACK_MAP};
+use crate::{read_str, ACCESS_MAP};
 
 #[fentry(function = "do_faccessat")]
 fn fentry_do_faccessat(probe: FEntryContext) -> u32 {
@@ -32,9 +31,7 @@ unsafe fn try_fentry_do_faccessat(ctx: &FEntryContext) -> Result<u32, OsSanitize
     filename.hash(&mut hasher);
     let hash = hasher.finish();
 
-    let stack_id = STACK_MAP
-        .get_stackid(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-        .map_err(|e| CouldntRecoverStack("faccessat", e))? as u64;
+    let stack_id = crate::report_stack_id(ctx, "faccessat")?;
 
     ACCESS_MAP
         .insert(&(pid_tgid, dfd as u64, hash), &(Access, stack_id), 0)

@@ -16,7 +16,6 @@ use aya_ebpf::programs::ProbeContext;
 use aya_ebpf::{memset, EbpfContext};
 use aya_log_ebpf::{error, info, log, warn, Level};
 
-use crate::binding::vm_area_struct;
 use os_sanitizer_common::CopyViolation::Strlen;
 use os_sanitizer_common::OsSanitizerError::*;
 use os_sanitizer_common::{
@@ -24,6 +23,7 @@ use os_sanitizer_common::{
     EXECUTABLE_LEN, SERIALIZED_SIZE, USERSTR_LEN,
 };
 
+use crate::binding::vm_area_struct;
 use crate::strlen::STRLEN_MAP;
 
 pub(crate) type Hasher = rustc_hash::FxHasher;
@@ -185,6 +185,17 @@ unsafe fn try_check_bad_copy(
 pub static REPORT_SCRATCH: PerCpuArray<[u8; SERIALIZED_SIZE]> = PerCpuArray::with_max_entries(1, 0);
 #[map]
 pub static STRING_SCRATCH: PerCpuArray<[u8; USERSTR_LEN]> = PerCpuArray::with_max_entries(1, 0);
+
+#[inline(always)]
+pub(crate) unsafe fn report_stack_id<C: EbpfContext>(
+    ctx: &C,
+    op: &'static str,
+) -> Result<u64, OsSanitizerError> {
+    STACK_MAP
+        .get_stackid(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
+        .map_err(|e| CouldntRecoverStack(op, e))
+        .map(|i| i as u64)
+}
 
 #[inline(always)]
 pub(crate) unsafe fn read_str(

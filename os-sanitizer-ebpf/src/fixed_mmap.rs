@@ -1,6 +1,6 @@
 use core::ffi::c_ulong;
 
-use aya_ebpf::bindings::{task_struct, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
+use aya_ebpf::bindings::task_struct;
 use aya_ebpf::cty::{c_long, c_void};
 use aya_ebpf::helpers::gen::bpf_get_current_comm;
 use aya_ebpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
@@ -9,14 +9,14 @@ use aya_ebpf::programs::{FEntryContext, ProbeContext};
 use aya_ebpf_macros::{fentry, map, uprobe, uretprobe};
 
 use os_sanitizer_common::OsSanitizerError::{
-    CouldntFindVma, CouldntGetComm, CouldntRecoverStack, UnexpectedNull, Unreachable,
+    CouldntFindVma, CouldntGetComm, UnexpectedNull, Unreachable,
 };
 use os_sanitizer_common::{
     FixedMmapViolation, OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN,
 };
 
 use crate::binding::vm_area_struct;
-use crate::{access_vm_flags, emit_report, IGNORED_PIDS, STACK_MAP};
+use crate::{access_vm_flags, emit_report, IGNORED_PIDS};
 
 const MAP_FIXED: c_ulong = 16; // manually determined
 
@@ -33,9 +33,7 @@ unsafe fn emit_fixed_mmap_report(
     protection: u64,
     variant: FixedMmapViolation,
 ) -> Result<(), OsSanitizerError> {
-    let stack_id = STACK_MAP
-        .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-        .map_err(|e| CouldntRecoverStack("fixed-mmap", e))? as u64;
+    let stack_id = crate::report_stack_id(probe, "fixed-mmap")?;
 
     let mut executable = [0u8; EXECUTABLE_LEN];
 

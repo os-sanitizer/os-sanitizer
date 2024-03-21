@@ -1,13 +1,15 @@
-use crate::{emit_error, emit_report, STACK_MAP};
-use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
+use core::ffi::c_void;
+
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::helpers::gen::bpf_get_current_comm;
 use aya_ebpf::maps::LruHashMap;
 use aya_ebpf::programs::ProbeContext;
 use aya_ebpf_macros::{map, uprobe};
-use core::ffi::c_void;
-use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, CouldntRecoverStack, Unreachable};
+
+use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, Unreachable};
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
+
+use crate::{emit_error, emit_report};
 
 #[map]
 static UNLOCKED_USED_FILE_POINTERS: LruHashMap<(u64, u64), u64> =
@@ -21,10 +23,7 @@ unsafe fn check_filep_usage(probe: &ProbeContext, pid_tgid: u64, filep: u64) {
         if orig_pid_tgid != pid_tgid {
             #[inline(always)]
             unsafe fn report(probe: &ProbeContext, pid_tgid: u64) -> Result<(), OsSanitizerError> {
-                let stack_id = STACK_MAP
-                    .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-                    .map_err(|e| CouldntRecoverStack("filep-unlocked", e))?
-                    as u64;
+                let stack_id = crate::report_stack_id(probe, "filep-unlocked")?;
 
                 let mut executable = [0u8; EXECUTABLE_LEN];
 

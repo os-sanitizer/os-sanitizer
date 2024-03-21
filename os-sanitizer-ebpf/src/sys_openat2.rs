@@ -1,17 +1,16 @@
 use core::ffi::c_int;
 use core::hash::{Hash, Hasher};
 
-use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_ebpf::cty::{c_void, uintptr_t};
 use aya_ebpf::helpers::gen::bpf_get_current_comm;
 use aya_ebpf::helpers::{bpf_get_current_pid_tgid, bpf_get_current_uid_gid};
 use aya_ebpf::programs::FEntryContext;
 use aya_ebpf_macros::fentry;
 
-use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, CouldntRecoverStack, Unreachable};
+use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, Unreachable};
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
 
-use crate::{emit_report, read_str, ACCESS_MAP, FLAGGED_FILE_OPEN_PIDS, IGNORED_PIDS, STACK_MAP};
+use crate::{emit_report, read_str, ACCESS_MAP, FLAGGED_FILE_OPEN_PIDS, IGNORED_PIDS};
 
 #[fentry(function = "do_sys_openat2")]
 fn fentry_do_sys_openat2(probe: FEntryContext) -> u32 {
@@ -57,9 +56,7 @@ unsafe fn try_fentry_do_sys_openat2(ctx: &FEntryContext) -> Result<u32, OsSaniti
         return Err(CouldntGetComm("do_sys_openat2", res));
     }
 
-    let stack_id = STACK_MAP
-        .get_stackid(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-        .map_err(|e| CouldntRecoverStack("do_sys_openat2", e))? as u64;
+    let stack_id = crate::report_stack_id(ctx, "do_sys_openat2")?;
 
     let uid_gid = bpf_get_current_uid_gid();
 

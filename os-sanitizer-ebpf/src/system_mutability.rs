@@ -1,4 +1,4 @@
-use aya_ebpf::bindings::{__u64, task_struct, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
+use aya_ebpf::bindings::{__u64, task_struct};
 use aya_ebpf::cty::{c_long, c_void, uintptr_t};
 use aya_ebpf::helpers::gen::bpf_get_current_comm;
 use aya_ebpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
@@ -6,12 +6,12 @@ use aya_ebpf::programs::ProbeContext;
 use aya_ebpf_macros::uprobe;
 
 use os_sanitizer_common::OsSanitizerError::{
-    CouldntFindVma, CouldntGetComm, CouldntRecoverStack, UnexpectedNull, Unreachable,
+    CouldntFindVma, CouldntGetComm, UnexpectedNull, Unreachable,
 };
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
 
 use crate::binding::vm_area_struct;
-use crate::{access_vm_flags, emit_report, read_str, IGNORED_PIDS, STACK_MAP};
+use crate::{access_vm_flags, emit_report, read_str, IGNORED_PIDS};
 
 #[repr(C)]
 struct SystemMutabilityContext {
@@ -39,10 +39,7 @@ unsafe extern "C" fn system_mutability_callback(
 
         // if writable
         if (vm_flags & 0x00000002) != 0 {
-            let stack_id = STACK_MAP
-                .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-                .map_err(|e| CouldntRecoverStack("system-mutability", e))?
-                as u64;
+            let stack_id = crate::report_stack_id(probe, "system-mutability")?;
 
             let mut executable = [0u8; EXECUTABLE_LEN];
 

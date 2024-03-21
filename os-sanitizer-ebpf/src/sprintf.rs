@@ -1,13 +1,14 @@
-use crate::{emit_report, IGNORED_PIDS, STACK_MAP};
-use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_ebpf::cty::{c_void, uintptr_t};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::helpers::gen::bpf_get_current_comm;
 use aya_ebpf::maps::LruHashMap;
 use aya_ebpf::programs::ProbeContext;
 use aya_ebpf_macros::{map, uprobe, uretprobe};
-use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, CouldntRecoverStack, Unreachable};
+
+use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, Unreachable};
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
+
+use crate::{emit_report, IGNORED_PIDS};
 
 #[map]
 static SPRINTF_SAFE_WRAPPED: LruHashMap<u64, u8> = LruHashMap::with_max_entries(1 << 16, 0);
@@ -57,9 +58,7 @@ unsafe fn try_uprobe_sprintf(probe: &ProbeContext) -> Result<u32, OsSanitizerErr
         .ok_or(Unreachable("sprintf has a dest pointer"))?;
 
     if (0x7ff000000000..0x800000000000).contains(&destptr) {
-        let stack_id = STACK_MAP
-            .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-            .map_err(|e| CouldntRecoverStack("sprintf", e))? as u64;
+        let stack_id = crate::report_stack_id(probe, "sprintf")?;
 
         let mut executable = [0u8; EXECUTABLE_LEN];
 

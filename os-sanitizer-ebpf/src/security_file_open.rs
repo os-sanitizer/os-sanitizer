@@ -1,17 +1,17 @@
-use crate::binding::file;
-use crate::{emit_report, FLAGGED_FILE_OPEN_PIDS, IGNORED_PIDS, STACK_MAP, STRING_SCRATCH};
-use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
+use core::mem::offset_of;
+
 use aya_ebpf::cty::{c_char, c_void, uintptr_t};
 use aya_ebpf::helpers::gen::bpf_get_current_comm;
 use aya_ebpf::helpers::{bpf_d_path, bpf_get_current_pid_tgid, bpf_get_current_uid_gid};
 use aya_ebpf::programs::FEntryContext;
 use aya_ebpf_macros::fentry;
-use core::mem::offset_of;
+
 use os_sanitizer_common::OpenViolation::{Perms, Toctou};
-use os_sanitizer_common::OsSanitizerError::{
-    CouldntAccessBuffer, CouldntGetComm, CouldntGetPath, CouldntRecoverStack,
-};
+use os_sanitizer_common::OsSanitizerError::{CouldntAccessBuffer, CouldntGetComm, CouldntGetPath};
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
+
+use crate::binding::file;
+use crate::{emit_report, FLAGGED_FILE_OPEN_PIDS, IGNORED_PIDS, STRING_SCRATCH};
 
 #[fentry(function = "security_file_open")]
 fn fentry_security_file_open(probe: FEntryContext) -> u32 {
@@ -78,10 +78,7 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
             return Err(CouldntGetComm("security_file_open", res));
         }
 
-        let stack_id = STACK_MAP
-            .get_stackid(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-            .map_err(|e| CouldntRecoverStack("security_file_open", e))?
-            as u64;
+        let stack_id = crate::report_stack_id(ctx, "security_file_open")?;
 
         let report = OsSanitizerReport::Open {
             executable,

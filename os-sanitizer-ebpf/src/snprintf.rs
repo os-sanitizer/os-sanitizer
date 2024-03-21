@@ -1,4 +1,3 @@
-use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_ebpf::cty::{c_int, c_void, size_t, uintptr_t};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::helpers::gen::bpf_get_current_comm;
@@ -7,12 +6,10 @@ use aya_ebpf::programs::{FEntryContext, ProbeContext};
 use aya_ebpf::EbpfContext;
 use aya_ebpf_macros::{fentry, map, uprobe, uretprobe};
 
-use os_sanitizer_common::OsSanitizerError::{
-    CouldntGetComm, CouldntRecoverStack, MissingArg, Unreachable,
-};
+use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, MissingArg, Unreachable};
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, SnprintfViolation, EXECUTABLE_LEN};
 
-use crate::{emit_report, IGNORED_PIDS, STACK_MAP};
+use crate::{emit_report, IGNORED_PIDS};
 
 #[map]
 static SNPRINTF_SAFE_WRAPPED: LruHashMap<u64, u8> = LruHashMap::with_max_entries(1 << 16, 0);
@@ -102,10 +99,7 @@ unsafe fn try_uretprobe_snprintf(probe: &ProbeContext) -> Result<u32, OsSanitize
             .ret()
             .ok_or(Unreachable("no return value for snprintf"))?;
 
-        let stack_id = STACK_MAP
-            .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-            .map_err(|e| CouldntRecoverStack("printf-mutability", e))?
-            as u64;
+        let stack_id = crate::report_stack_id(probe, "printf-mutability")?;
 
         SNPRINTF_SIZE_MAP
             .insert(
@@ -158,10 +152,7 @@ unsafe fn maybe_report_sprintf<C: EbpfContext>(
                 SnprintfViolation::PossibleLeak
             };
 
-            let second_stack_id = STACK_MAP
-                .get_stackid(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-                .map_err(|e| CouldntRecoverStack("printf-mutability", e))?
-                as u64;
+            let second_stack_id = crate::report_stack_id(ctx, "printf-mutability")?;
 
             let report = OsSanitizerReport::Snprintf {
                 executable,

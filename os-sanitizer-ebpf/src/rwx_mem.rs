@@ -1,16 +1,15 @@
 use core::ffi::c_void;
 
-use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::helpers::gen::bpf_get_current_comm;
 use aya_ebpf::programs::FEntryContext;
 use aya_ebpf_macros::fentry;
 
-use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, CouldntRecoverStack, UnexpectedNull};
+use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, UnexpectedNull};
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
 
 use crate::binding::vm_area_struct;
-use crate::{access_vm_end, access_vm_flags, access_vm_start, emit_report, IGNORED_PIDS, STACK_MAP};
+use crate::{access_vm_end, access_vm_flags, access_vm_start, emit_report, IGNORED_PIDS};
 
 #[fentry(function = "vma_set_page_prot")]
 fn fentry_vma_set_page_prot(probe: FEntryContext) -> u32 {
@@ -39,9 +38,7 @@ unsafe fn try_fentry_vma_set_page_prot(ctx: &FEntryContext) -> Result<u32, OsSan
 
     // if writable and executable
     if (vm_flags & 0x00000002) != 0 && (vm_flags & 0x00000004) != 0 {
-        let stack_id = STACK_MAP
-            .get_stackid(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-            .map_err(|e| CouldntRecoverStack("rwx-vma", e))? as u64;
+        let stack_id = crate::report_stack_id(ctx, "rwx-vma")?;
 
         let mut executable = [0u8; EXECUTABLE_LEN];
 

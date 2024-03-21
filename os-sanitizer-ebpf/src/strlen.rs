@@ -1,11 +1,13 @@
-use crate::IGNORED_PIDS;
 use aya_ebpf::cty::{size_t, uintptr_t};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::maps::{HashMap, LruHashMap};
 use aya_ebpf::programs::ProbeContext;
 use aya_ebpf_macros::{map, uprobe, uretprobe};
+
 use os_sanitizer_common::OsSanitizerError;
 use os_sanitizer_common::OsSanitizerError::{OutOfSpace, Unreachable};
+
+use crate::IGNORED_PIDS;
 
 #[map]
 static STRLEN_PTR_MAP: HashMap<u64, uintptr_t> = HashMap::with_max_entries(1 << 16, 0);

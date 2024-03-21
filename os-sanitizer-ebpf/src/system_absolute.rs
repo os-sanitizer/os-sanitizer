@@ -1,14 +1,14 @@
-use aya_ebpf::bindings::{__u64, BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
+use aya_ebpf::bindings::__u64;
 use aya_ebpf::cty::{c_void, uintptr_t};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::helpers::gen::bpf_get_current_comm;
 use aya_ebpf::programs::ProbeContext;
 use aya_ebpf_macros::uprobe;
 
-use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, CouldntRecoverStack, Unreachable};
+use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, Unreachable};
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
 
-use crate::{emit_report, read_str, IGNORED_PIDS, STACK_MAP};
+use crate::{emit_report, read_str, IGNORED_PIDS};
 
 #[inline(always)]
 unsafe fn check_system_absolute(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
@@ -25,9 +25,7 @@ unsafe fn check_system_absolute(probe: &ProbeContext) -> Result<u32, OsSanitizer
     let command = read_str(command_param as uintptr_t, "system command")?;
 
     if !command.trim_ascii_start().starts_with(b"/") {
-        let stack_id = STACK_MAP
-            .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
-            .map_err(|e| CouldntRecoverStack("system-absolute", e))? as u64;
+        let stack_id = crate::report_stack_id(probe, "system-absolute")?;
 
         let mut executable = [0u8; EXECUTABLE_LEN];
 
