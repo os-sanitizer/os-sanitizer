@@ -64,7 +64,12 @@ impl FileOffsetResolver {
                 .unwrap();
             stdout.write_u8(b'\n').await.unwrap();
         }
-        let mut symbolizer = Command::new("llvm-symbolizer")
+        let mut cmd = if let Some(symbolizer) = std::env::var_os("LLVM_SYMBOLIZER") {
+            Command::new(symbolizer)
+        } else {
+            Command::new("llvm-symbolizer")
+        };
+        let mut symbolizer = cmd
             .args([
                 "--debuginfod",
                 "--demangle",
@@ -77,7 +82,8 @@ impl FileOffsetResolver {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .stdin(Stdio::piped())
-            .spawn()?;
+            .spawn()
+            .expect("unable to spawn llvm-symbolizer; please install llvm-symbolizer or set LLVM_SYMBOLIZER");
         let symbolizer_in = symbolizer.stdin.take().unwrap();
         let symbolizer_out = symbolizer.stdout.take().unwrap();
         let symbolizer_out = BufReader::new(symbolizer_out);
