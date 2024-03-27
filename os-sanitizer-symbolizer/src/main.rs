@@ -74,6 +74,12 @@ impl FileOffsetResolver {
                 .unwrap();
             stdout.write_u8(b'\n').await.unwrap();
         }
+        let _ = Command::new("debuginfod-find")
+            .arg("debuginfo")
+            .arg(path.as_ref().as_os_str())
+            //            .stdout(Stdio::null())
+            .status()
+            .await;
         let mut cmd = if let Some(symbolizer) = std::env::var_os("LLVM_SYMBOLIZER") {
             Command::new(symbolizer)
         } else {
