@@ -1,3 +1,3 @@
 [workspace]
-members = ["xtask", "os-sanitizer", "os-sanitizer-common", "os-sanitizer-symbolizer", "os-sanitizer-db"]
+members = ["xtask", "os-sanitizer", "os-sanitizer-common", "os-sanitizer-symbolizer"]
 resolver = "2"

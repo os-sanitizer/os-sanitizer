@@ -50,6 +50,7 @@ If you used a different target, you will need to use `./target/<TARGET>/release/
 cargo xtask build-ebpf --release
 cargo build --release
 sudo cp target/release/os-sanitizer /usr/local/sbin/
+sudo cp target/release/os-sanitizer-symbolizer /usr/local/bin/
 sudo cp os-sanitizer.service /usr/lib/systemd/system/
 sudo systemctl enable os-sanitizer
 sudo service os-sanitizer start
@@ -83,13 +84,13 @@ RUST_LOG=info cargo xtask run --access | tee access.log
 Then, in another terminal, you can do:
 
 ```bash
-cargo run --release -p os-sanitizer-symbolizer access.log
+os-sanitizer-symbolizer access.log
 ```
 
 If you're using the service form of os-sanitizer, you can similarly do:
 
 ```bash
-sudo journalctl -b -u os-sanitizer | cargo run --release -p os-sanitizer-symbolizer
+sudo journalctl -b -u os-sanitizer | os-sanitizer-symbolizer
 ```
 
 As a fun little bonus: os-sanitizer-symbolizer also symoblises ASAN stacktraces -- fun!
