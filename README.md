@@ -4,7 +4,7 @@
 
 1. Install clang (you need at least libclang.so) of your choice.
 2. Install Rust *nightly*: https://rustup.rs/
-3. Install bpf-linker from the `feature/fix-di` branch: `cargo install --force --git https://github.com/aya-rs/bpf-linker`
+3. Install bpf-linker: `cargo install --force --git https://github.com/aya-rs/bpf-linker`
 4. Install `bpftool` for your system (e.g., for Ubuntu: `sudo apt install linux-tools-common`)
 5. Install `aya-tool`: `cargo install bindgen-cli; cargo install --git https://github.com/aya-rs/aya aya-tool`
 
@@ -67,7 +67,8 @@ Not all OSes have good debuginfod support. This has been tested on Fedora, but i
 fetch source information on Ubuntu.
 
 From: https://ubuntu.com/server/docs/service-debuginfod
-> Currently, the service only provides DWARF information. There are plans to make it also index and serve source-code in the future.
+> Currently, the service only provides DWARF information. There are plans to make it also index and serve source-code in
+> the future.
 
 You need to install `debuginfod-find` for your system and set the `DEBUGINFOD_URLS` variable
 accordingly before using symbolisation.
