@@ -12,6 +12,7 @@ use std::{
     },
 };
 
+use aya::programs::{KProbe, Lsm};
 use aya::{
     include_bytes_aligned,
     maps::{AsyncPerfEventArray, HashMap as AyaHashMap, StackTraceMap},
@@ -33,7 +34,6 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio::{signal, task};
 
-use crate::file_perms::{check_ownership, intermediaries, Who};
 use os_sanitizer_common::{
     CopyViolation, FixedMmapViolation, OpenViolation, OsSanitizerReport, SnprintfViolation,
     SERIALIZED_SIZE,
@@ -41,7 +41,6 @@ use os_sanitizer_common::{
 
 use crate::resolver::{ProcMap, ProcMapOffsetResolver};
 
-mod file_perms;
 mod resolver;
 
 const PROCMAP_CACHE_TIME: u64 = 30;
@@ -65,6 +64,27 @@ macro_rules! attach_fentry {
 
     ($bpf: expr, $btf: expr, $name: literal) => {
         attach_fentry!($bpf, $btf, $name, $name)
+    };
+}
+
+macro_rules! attach_lsm {
+    ($bpf: expr, $btf: expr, $name: literal, $progname: literal) => {
+        #[allow(unused_imports)]
+        use ::std::io::Write as _;
+
+        print!("loading {} (lsm: {})...", $progname, $name);
+        let _ = std::io::stdout().lock().flush();
+        let program: &mut Lsm = $bpf
+            .program_mut(concat!("lsm_", $progname))
+            .unwrap()
+            .try_into()?;
+        program.load($name, &$btf)?;
+        program.attach()?;
+        println!("done");
+    };
+
+    ($bpf: expr, $btf: expr, $name: literal) => {
+        attach_lsm!($bpf, $btf, $name, $name)
     };
 }
 
@@ -203,6 +223,11 @@ struct Args {
     filep_unlocked: bool,
     #[arg(long, help = "Log violations of mmap being used with fixed addresses")]
     fixed_mmap: bool,
+    #[arg(
+        long,
+        help = "Log violations of open being used on interceptable paths"
+    )]
+    interceptable_path: bool,
 
     #[arg(long, help = "Enable all reporting strategies")]
     all: bool,
@@ -236,6 +261,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.system_absolute = true;
         args.filep_unlocked = true;
         args.fixed_mmap = true;
+        args.interceptable_path = true;
     }
 
     if !(args.access
@@ -251,7 +277,8 @@ async fn main() -> Result<(), anyhow::Error> {
         || args.system_mutability
         || args.system_absolute
         || args.filep_unlocked
-        || args.fixed_mmap)
+        || args.fixed_mmap
+        || args.interceptable_path)
     {
         eprintln!("You must specify one of the modes.");
         <Args as CommandFactory>::command().print_help()?;
@@ -336,7 +363,7 @@ async fn main() -> Result<(), anyhow::Error> {
                                 | OsSanitizerReport::Strncpy { executable, pid_tgid, stack_id, .. }
                                 | OsSanitizerReport::Memcpy { executable, pid_tgid, stack_id, .. }
                                 | OsSanitizerReport::Open { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::UncheckedOpen { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::UnsafeOpen { executable, pid_tgid, stack_id, .. }
                                 | OsSanitizerReport::Access { executable, pid_tgid, stack_id, .. }
                                 | OsSanitizerReport::Gets { executable, pid_tgid, stack_id, .. }
                                 | OsSanitizerReport::RwxVma { executable, pid_tgid, stack_id, .. }
@@ -528,7 +555,7 @@ async fn main() -> Result<(), anyhow::Error> {
                                         }
                                     }
                                 }
-                                OsSanitizerReport::UncheckedOpen {
+                                OsSanitizerReport::UnsafeOpen {
                                     uid_gid, dfd, filename, ..
                                 } => {
                                     let Ok(filename) = (unsafe {
@@ -881,6 +908,16 @@ async fn main() -> Result<(), anyhow::Error> {
         attach_fentry!(bpf, btf, "do_statx");
         attach_fentry!(bpf, btf, "do_sys_openat2");
         // attach_uprobe!(bpf, "access", "libc");
+    }
+
+    if args.interceptable_path {
+        attach_lsm!(bpf, btf, "inode_permission", "open_permissions_inode");
+        attach_fentry!(
+            bpf,
+            btf,
+            "security_file_permission",
+            "open_permissions_file"
+        );
     }
 
     if args.gets {

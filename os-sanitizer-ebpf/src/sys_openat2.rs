@@ -1,16 +1,15 @@
 use core::ffi::c_int;
 use core::hash::{Hash, Hasher};
 
-use aya_ebpf::cty::{c_void, uintptr_t};
-use aya_ebpf::helpers::gen::bpf_get_current_comm;
-use aya_ebpf::helpers::{bpf_get_current_pid_tgid, bpf_get_current_uid_gid};
+use aya_ebpf::cty::uintptr_t;
+use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::programs::FEntryContext;
 use aya_ebpf_macros::fentry;
 
-use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, Unreachable};
-use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
+use os_sanitizer_common::OsSanitizerError;
+use os_sanitizer_common::OsSanitizerError::Unreachable;
 
-use crate::{emit_report, read_str, ACCESS_MAP, FLAGGED_FILE_OPEN_PIDS, IGNORED_PIDS};
+use crate::{read_str, ACCESS_MAP, FLAGGED_FILE_OPEN_PIDS, IGNORED_PIDS};
 
 #[fentry(function = "do_sys_openat2")]
 fn fentry_do_sys_openat2(probe: FEntryContext) -> u32 {
@@ -44,32 +43,6 @@ unsafe fn try_fentry_do_sys_openat2(ctx: &FEntryContext) -> Result<u32, OsSaniti
             .insert(&pid_tgid, &access, 0)
             .map_err(|_| Unreachable("map insertion failure"))?;
     }
-
-    let mut executable = [0; EXECUTABLE_LEN];
-
-    // we do this manually because the existing implementation is restricted to 16 bytes
-    let res = bpf_get_current_comm(
-        executable.as_mut_ptr() as *mut c_void,
-        executable.len() as u32,
-    );
-    if res < 0 {
-        return Err(CouldntGetComm("do_sys_openat2", res));
-    }
-
-    let stack_id = crate::report_stack_id(ctx, "do_sys_openat2")?;
-
-    let uid_gid = bpf_get_current_uid_gid();
-
-    let report = OsSanitizerReport::UncheckedOpen {
-        executable,
-        pid_tgid,
-        uid_gid,
-        stack_id,
-        dfd: dfd as i64,
-        filename,
-    };
-
-    emit_report(ctx, &report)?;
 
     Ok(0)
 }

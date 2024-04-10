@@ -14,7 +14,7 @@ use aya_ebpf::macros::uprobe;
 use aya_ebpf::maps::{HashMap, LruHashMap, PerCpuArray, PerfEventArray, StackTrace};
 use aya_ebpf::programs::ProbeContext;
 use aya_ebpf::{memset, EbpfContext};
-use aya_log_ebpf::{error, info, log, warn, Level};
+use aya_log_ebpf::{error, info, warn};
 
 use os_sanitizer_common::CopyViolation::Strlen;
 use os_sanitizer_common::OsSanitizerError::*;
@@ -37,6 +37,7 @@ mod do_faccessat;
 mod do_statx;
 mod filep_unlocked;
 mod fixed_mmap;
+mod open_permissions;
 mod memcpy;
 mod printf_mutability;
 mod rwx_mem;
@@ -82,10 +83,8 @@ fn emit_error<C: EbpfContext>(probe: &C, e: OsSanitizerError, name: &str) -> u32
             );
         }
         CouldntReadUser(op, ptr, num_bytes, e) => {
-            let level = if e == -14 { Level::Debug } else { Level::Error };
-            log!(
+            error!(
                 probe,
-                level,
                 "{}: Couldn't read user address 0x{:x} ({} bytes) while handling {} ({})",
                 op,
                 ptr,
