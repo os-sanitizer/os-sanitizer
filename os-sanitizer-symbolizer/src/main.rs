@@ -117,11 +117,13 @@ impl FileOffsetResolver {
 
     async fn resolve_symbol(&mut self, addr: u64) -> Vec<LLVMAddrSymbol> {
         // avoid looking up private directories
-        if self.path.is_absolute() && self
+        if self.path.is_absolute()
+            && self
                 .symbolizer_in
                 .write_all(format!("{:#x}\n", addr).as_bytes())
                 .await
-                .is_ok() {
+                .is_ok()
+        {
             let mut line = String::new();
             if self.symbolizer_out.read_line(&mut line).await.is_ok() {
                 if let Ok(entry) = serde_json::from_str::<LLVMAddrEntry>(&line) {

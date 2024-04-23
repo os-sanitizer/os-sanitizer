@@ -556,10 +556,15 @@ async fn main() -> Result<(), anyhow::Error> {
                                     }
                                 }
                                 OsSanitizerReport::UnsafeOpen {
-                                    filename, uid, gid, uids, gids, mask, everyone, ..
+                                    original, filename, uid, gid, uids, gids, mask, everyone, ..
                                 } => {
-                                    let Ok(filename) = (unsafe {
-                                        CStr::from_ptr(filename.as_ptr() as *const c_char).to_str()
+                                    let Ok(filename) = CStr::from_bytes_until_nul(filename.as_slice()).map(|s| s.to_string_lossy()) else {
+                                        return;
+                                    };
+                                    let Ok(original) = (if let Some(original) = &original {
+                                        CStr::from_bytes_until_nul(original.as_slice()).map(|s| s.to_string_lossy())
+                                    } else {
+                                        Ok(Cow::from("<unrecoverable>"))
                                     }) else {
                                         return;
                                     };
@@ -598,7 +603,7 @@ async fn main() -> Result<(), anyhow::Error> {
                                     } else {
                                         ""
                                     };
-                                    (format!("{context}, acting as {uid}:{gid}, attempted to access {filename} with {perms:?} ({mask:#x}), which may be intercepted by uids [{uids}] and gids [{gids}]{and_everyone}"), level)
+                                    (format!("{context}, acting as {uid}:{gid}, attempted to access {filename} (originally as {original}) with {perms:?} ({mask:#x}), which may be intercepted by uids [{uids}] and gids [{gids}]{and_everyone}"), level)
                                 }
                                 OsSanitizerReport::Access { .. } => {
                                     (format!("{context} invoked access, which is a syscall wrapper explicitly warned against"), Level::Info)
@@ -896,10 +901,11 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     if args.interceptable_path {
+        attach_fentry!(bpf, btf, "path_openat", "clear_open_permissions");
+        attach_fentry!(bpf, btf, "do_filp_open");
+        attach_fentry!(bpf, btf, "may_open");
         attach_lsm!(bpf, btf, "inode_permission", "open_permissions_inode");
         attach_fentry!(bpf, btf, "security_file_open", "open_permissions_file");
-        attach_fentry!(bpf, btf, "may_open");
-        attach_fentry!(bpf, btf, "path_openat", "clear_open_permissions");
     }
 
     if args.gets {

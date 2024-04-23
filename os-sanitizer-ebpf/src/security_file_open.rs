@@ -49,7 +49,7 @@ unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSa
     };
 
     let ptr = STRING_SCRATCH
-        .get_ptr_mut(0)
+        .get_ptr_mut(1)
         .ok_or(CouldntAccessBuffer("emit-report"))?;
     let filename = &mut *ptr;
     let path = data as uintptr_t + offset_of!(file, f_path);

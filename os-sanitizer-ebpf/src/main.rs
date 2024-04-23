@@ -183,7 +183,7 @@ unsafe fn try_check_bad_copy(
 #[map]
 pub static REPORT_SCRATCH: PerCpuArray<[u8; SERIALIZED_SIZE]> = PerCpuArray::with_max_entries(1, 0);
 #[map]
-pub static STRING_SCRATCH: PerCpuArray<[u8; USERSTR_LEN]> = PerCpuArray::with_max_entries(1, 0);
+pub static STRING_SCRATCH: PerCpuArray<[u8; USERSTR_LEN]> = PerCpuArray::with_max_entries(2, 0);
 
 #[inline(always)]
 pub(crate) unsafe fn report_stack_id<C: EbpfContext>(

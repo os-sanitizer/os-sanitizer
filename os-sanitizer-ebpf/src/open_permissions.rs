@@ -14,9 +14,11 @@ use os_sanitizer_common::OsSanitizerError::{
 use os_sanitizer_common::OsSanitizerReport::UnsafeOpen;
 use os_sanitizer_common::{OsSanitizerError, EXECUTABLE_LEN};
 
-use crate::binding::{file, inode};
-use crate::{report_stack_id, IGNORED_PIDS, STRING_SCRATCH};
+use crate::binding::{file, filename, inode};
+use crate::{read_str, report_stack_id, IGNORED_PIDS, STRING_SCRATCH};
 
+#[map]
+pub static ORIGINAL_NAME: LruHashMap<u64, uintptr_t> = LruHashMap::with_max_entries(65536, 0);
 #[map]
 pub static PERMISSION_INODE_RECORD: LruHashMap<u64, ([u32; 8], [u32; 8], bool)> =
     LruHashMap::with_max_entries(65536, 0);
@@ -94,6 +96,31 @@ unsafe fn try_open_permissions_inode(ctx: &LsmContext) -> Result<(), OsSanitizer
     Ok(())
 }
 
+#[fentry(function = "do_filp_open")]
+fn fentry_do_filp_open(ctx: FEntryContext) -> i32 {
+    if let Err(e) = unsafe { try_do_filp_open(&ctx) } {
+        crate::emit_error(&ctx, e, "do_filp_open_fentry");
+    }
+    0
+}
+
+unsafe fn try_do_filp_open(ctx: &FEntryContext) -> Result<(), OsSanitizerError> {
+    let pid_tgid = bpf_get_current_pid_tgid();
+
+    if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
+        return Ok(());
+    }
+
+    let filename: *const filename = ctx.arg(1);
+    let uptr = (*filename).uptr as uintptr_t;
+
+    ORIGINAL_NAME
+        .insert(&pid_tgid, &uptr, 0)
+        .map_err(|_| OsSanitizerError::OutOfSpace("couldn't insert to original name record"))?;
+
+    Ok(())
+}
+
 #[fentry(function = "may_open")]
 fn fentry_may_open(ctx: FEntryContext) -> i32 {
     if let Err(e) = unsafe { try_may_open(&ctx) } {
@@ -136,71 +163,72 @@ unsafe fn try_open_permissions_file(ctx: &FEntryContext) -> Result<(), OsSanitiz
     let file: *const file = ctx.arg(0);
     let stack_id = report_stack_id(ctx, "stack eq check")?;
 
-    if let Some((uids, gids, everyone)) = PERMISSION_INODE_RECORD.get(&pid_tgid).copied() {
-        if let Some(mask) = MAY_OPEN_RECORD.get(&pid_tgid).copied() {
-            // discard the accumulated perms
-            let _ = PERMISSION_INODE_RECORD.remove(&pid_tgid);
-            let _ = MAY_OPEN_RECORD.remove(&pid_tgid);
+    if let Some(original) = ORIGINAL_NAME.get(&pid_tgid).copied() {
+        if let Some((uids, gids, everyone)) = PERMISSION_INODE_RECORD.get(&pid_tgid).copied() {
+            if let Some(mask) = MAY_OPEN_RECORD.get(&pid_tgid).copied() {
+                if uids[0] == 0 && gids[0] == 0 && !everyone {
+                    return Ok(()); // nothing to report
+                }
 
-            if uids[0] == 0 && gids[0] == 0 && !everyone {
-                return Ok(()); // nothing to report
+                // let inode_type = ((*(*file).f_inode).i_mode >> 8) as u8;
+                let ptr = STRING_SCRATCH
+                    .get_ptr_mut(1)
+                    .ok_or(CouldntAccessBuffer("emit-report"))?;
+                if ptr == core::ptr::null_mut() {
+                    return Err(Unreachable("unset string scratch pointer"));
+                }
+                let filename = &mut *ptr;
+                let path = file as uintptr_t + offset_of!(file, f_path);
+
+                let res = bpf_d_path(
+                    path as *mut aya_ebpf::bindings::path,
+                    filename.as_mut_ptr() as *mut c_char,
+                    filename.len() as u32,
+                );
+                if res < 0 {
+                    return Err(CouldntGetPath("emit-report", res));
+                }
+
+                if filename[0] == 0 {
+                    return Ok(()); // nothing to report :(
+                }
+
+                if filename.starts_with(b"/dev") || filename.starts_with(b"/proc") {
+                    return Ok(()); // generally not desireable to report
+                }
+
+                let original = read_str(original, "original file requested").ok();
+
+                let uid = ctx.uid();
+                let gid = ctx.gid();
+
+                let mut executable = [0u8; EXECUTABLE_LEN];
+
+                // we do this manually because the existing implementation is restricted to 16 bytes
+                let res = bpf_get_current_comm(
+                    executable.as_mut_ptr() as *mut c_void,
+                    executable.len() as u32,
+                );
+                if res < 0 {
+                    return Err(CouldntGetComm("open permissions comm", res));
+                }
+
+                let report = UnsafeOpen {
+                    executable,
+                    uid,
+                    gid,
+                    pid_tgid,
+                    stack_id,
+                    original,
+                    filename,
+                    uids,
+                    gids,
+                    mask,
+                    everyone,
+                };
+
+                crate::emit_report(ctx, &report)?;
             }
-
-            // let inode_type = ((*(*file).f_inode).i_mode >> 8) as u8;
-            let ptr = STRING_SCRATCH
-                .get_ptr_mut(0)
-                .ok_or(CouldntAccessBuffer("emit-report"))?;
-            if ptr == core::ptr::null_mut() {
-                return Err(Unreachable("unset string scratch pointer"));
-            }
-            let filename = &mut *ptr;
-            let path = file as uintptr_t + offset_of!(file, f_path);
-
-            let res = bpf_d_path(
-                path as *mut aya_ebpf::bindings::path,
-                filename.as_mut_ptr() as *mut c_char,
-                filename.len() as u32,
-            );
-            if res < 0 {
-                return Err(CouldntGetPath("emit-report", res));
-            }
-
-            if filename[0] == 0 {
-                return Ok(()); // nothing to report :(
-            }
-
-            if filename.starts_with(b"/dev") || filename.starts_with(b"/proc") {
-                return Ok(()); // generally not desireable to report
-            }
-
-            let uid = ctx.uid();
-            let gid = ctx.gid();
-
-            let mut executable = [0u8; EXECUTABLE_LEN];
-
-            // we do this manually because the existing implementation is restricted to 16 bytes
-            let res = bpf_get_current_comm(
-                executable.as_mut_ptr() as *mut c_void,
-                executable.len() as u32,
-            );
-            if res < 0 {
-                return Err(CouldntGetComm("open permissions comm", res));
-            }
-
-            let report = UnsafeOpen {
-                executable,
-                uid,
-                gid,
-                pid_tgid,
-                stack_id,
-                filename,
-                uids,
-                gids,
-                mask,
-                everyone,
-            };
-
-            crate::emit_report(ctx, &report)?;
         }
     }
 

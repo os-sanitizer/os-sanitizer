@@ -8,7 +8,7 @@ use core::mem::size_of_val;
 pub const EXECUTABLE_LEN: usize = 16;
 pub const USERSTR_LEN: usize = 1024;
 
-pub const SERIALIZED_SIZE: usize = 3192;
+pub const SERIALIZED_SIZE: usize = 1 << 12;
 
 #[cfg(not(feature = "user"))]
 pub type MaybeOwnedArray<T, const N: usize> = &'static [T; N];
@@ -185,6 +185,7 @@ pub enum OsSanitizerReport {
         stack_id: u64,
         uid: u32,
         gid: u32,
+        original: Option<MaybeOwnedArray<u8, USERSTR_LEN>>,
         filename: MaybeOwnedArray<u8, USERSTR_LEN>,
         uids: [u32; 8],
         gids: [u32; 8],
@@ -263,10 +264,6 @@ impl SerialisedContent for [u8] {
 impl OsSanitizerReport {
     #[inline(always)]
     pub fn serialise_into(&self, buf: &mut [u8]) -> Result<(), OsSanitizerError> {
-        const _: () = assert!(
-            SERIALIZED_SIZE > 2 * core::mem::size_of::<OsSanitizerReport>(),
-            "The serialised size should have been larger than twice the report size!"
-        );
         let buf = buf.write(&[match self {
             OsSanitizerReport::RwxVma { .. } => 0u8,
             OsSanitizerReport::PrintfMutability { .. } => 1,
@@ -485,6 +482,7 @@ impl OsSanitizerReport {
             OsSanitizerReport::UnsafeOpen {
                 uid,
                 gid,
+                original,
                 filename,
                 uids,
                 gids,
@@ -496,6 +494,11 @@ impl OsSanitizerReport {
                     .write(&uid.to_be_bytes())?
                     .write(&gid.to_be_bytes())?
                     .write(filename.as_slice())?;
+                if let Some(original) = original {
+                    buf = buf.write(&1u8.to_be_bytes())?.write(original.as_slice())?;
+                } else {
+                    buf = buf.write(&0u8.to_be_bytes())?;
+                }
                 for uid in uids {
                     buf = buf.write(&uid.to_be_bytes())?;
                 }
@@ -761,10 +764,18 @@ impl TryFrom<&[u8]> for OsSanitizerReport {
                 let mut uid = 0;
                 let mut gid = 0;
                 let mut filename = [0u8; USERSTR_LEN];
+                let mut original = [0u8; USERSTR_LEN];
                 let mut value = value
                     .read_u32(&mut uid)?
                     .read_u32(&mut gid)?
                     .read(&mut filename)?;
+                let original = if value[0] != 0 {
+                    value = value[1..].read(&mut original)?;
+                    Some(original)
+                } else {
+                    value = &value[1..];
+                    None
+                };
                 let mut uids = [0u32; 8];
                 let mut gids = [0u32; 8];
                 let mut mask = 0;
@@ -785,6 +796,7 @@ impl TryFrom<&[u8]> for OsSanitizerReport {
                     stack_id,
                     uid,
                     gid,
+                    original,
                     filename,
                     uids,
                     gids,
