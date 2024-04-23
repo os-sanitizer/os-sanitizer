@@ -204,7 +204,7 @@ unsafe fn try_open_permissions_file(ctx: &FEntryContext) -> Result<(), OsSanitiz
 }
 
 #[fentry(function = "path_openat")]
-fn fentry_clear_open_permissions(ctx: FEntryContext) -> i32 {
+fn fentry_clear_open_permissions(_ctx: FEntryContext) -> i32 {
     let pid_tgid = bpf_get_current_pid_tgid();
     // discard the accumulated perms
     let _ = PERMISSION_INODE_RECORD.remove(&pid_tgid);
