@@ -183,11 +183,13 @@ pub enum OsSanitizerReport {
         executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,
         stack_id: u64,
+        uid: u32,
+        gid: u32,
         filename: MaybeOwnedArray<u8, USERSTR_LEN>,
-        uids: [u32; 16],
-        gids: [u32; 16],
+        uids: [u32; 8],
+        gids: [u32; 8],
         mask: u32,
-        inode_type: u8,
+        everyone: bool,
     },
     Access {
         executable: [u8; EXECUTABLE_LEN],
@@ -226,14 +228,6 @@ trait SerialisedContent {
         let mut buf = [0u8; size_of::<u32>()];
         let next = self.read(&mut buf)?;
         *content = u32::from_be_bytes(buf);
-        Ok(next)
-    }
-
-    #[cfg(feature = "user")]
-    fn read_i64(&self, content: &mut i64) -> Result<&Self, OsSanitizerError> {
-        let mut buf = [0u8; size_of::<i64>()];
-        let next = self.read(&mut buf)?;
-        *content = i64::from_be_bytes(buf);
         Ok(next)
     }
 }
@@ -489,15 +483,19 @@ impl OsSanitizerReport {
                 };
             }
             OsSanitizerReport::UnsafeOpen {
+                uid,
+                gid,
                 filename,
                 uids,
                 gids,
                 mask,
-                inode_type,
+                everyone,
                 ..
             } => {
-                buf.write(filename.as_slice())?;
-                let mut buf = buf;
+                let mut buf = buf
+                    .write(&uid.to_be_bytes())?
+                    .write(&gid.to_be_bytes())?
+                    .write(filename.as_slice())?;
                 for uid in uids {
                     buf = buf.write(&uid.to_be_bytes())?;
                 }
@@ -505,7 +503,7 @@ impl OsSanitizerReport {
                     buf = buf.write(&gid.to_be_bytes())?;
                 }
                 buf.write(&mask.to_be_bytes())?
-                    .write(&inode_type.to_be_bytes())?;
+                    .write(&(*everyone as u8).to_be_bytes())?;
             }
             OsSanitizerReport::Access { .. } => {}
             OsSanitizerReport::Gets { .. } => {}
@@ -760,12 +758,16 @@ impl TryFrom<&[u8]> for OsSanitizerReport {
                 }
             }
             14 => {
+                let mut uid = 0;
+                let mut gid = 0;
                 let mut filename = [0u8; USERSTR_LEN];
-                let mut value = value.read(&mut filename)?;
-                let mut uids = [0u32; 16];
-                let mut gids = [0u32; 16];
+                let mut value = value
+                    .read_u32(&mut uid)?
+                    .read_u32(&mut gid)?
+                    .read(&mut filename)?;
+                let mut uids = [0u32; 8];
+                let mut gids = [0u32; 8];
                 let mut mask = 0;
-                let mut inode_type = 0;
 
                 for uid in uids.iter_mut() {
                     value = value.read_u32(uid)?;
@@ -775,17 +777,19 @@ impl TryFrom<&[u8]> for OsSanitizerReport {
                 }
 
                 value = value.read_u32(&mut mask)?;
-                inode_type = value[0];
+                let everyone = value[0] != 0;
 
                 OsSanitizerReport::UnsafeOpen {
                     executable,
                     pid_tgid,
                     stack_id,
+                    uid,
+                    gid,
                     filename,
                     uids,
                     gids,
                     mask,
-                    inode_type,
+                    everyone,
                 }
             }
             _ => {

@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 use std::{
@@ -12,7 +11,7 @@ use std::{
     },
 };
 
-use aya::programs::{KProbe, Lsm};
+use aya::programs::Lsm;
 use aya::{
     include_bytes_aligned,
     maps::{AsyncPerfEventArray, HashMap as AyaHashMap, StackTraceMap},
@@ -25,7 +24,7 @@ use bytes::BytesMut;
 use clap::{CommandFactory, Parser};
 use cpp_demangle::DemangleOptions;
 use either::Either;
-use libc::{pid_t, AT_FDCWD, PROT_EXEC};
+use libc::{pid_t, PROT_EXEC};
 use log::{debug, log, warn, Level};
 use once_cell::sync::Lazy;
 use tokio::process::Command;
@@ -33,6 +32,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio::{signal, task};
+use users::{get_group_by_gid, get_user_by_uid};
 
 use os_sanitizer_common::{
     CopyViolation, FixedMmapViolation, OpenViolation, OsSanitizerReport, SnprintfViolation,
@@ -556,64 +556,49 @@ async fn main() -> Result<(), anyhow::Error> {
                                     }
                                 }
                                 OsSanitizerReport::UnsafeOpen {
-                                    uid_gid, dfd, filename, ..
+                                    filename, uid, gid, uids, gids, mask, everyone, ..
                                 } => {
                                     let Ok(filename) = (unsafe {
                                         CStr::from_ptr(filename.as_ptr() as *const c_char).to_str()
                                     }) else {
                                         return;
                                     };
-                                    let requested = PathBuf::from(filename);
-                                    let mut scope = PathBuf::from("/");
-                                    let path = if requested.is_absolute() {
-                                        requested
-                                    } else if dfd == AT_FDCWD as i64 {
-                                        let Ok(mut path) = tokio::fs::read_link(format!("/proc/{pid}/cwd")).await else {
-                                            return;
-                                        };
-                                        scope = path.clone();
-                                        path.extend(&requested);
-                                        path
-                                    } else {
-                                        let Ok(mut path) = tokio::fs::read_link(format!("/proc/{pid}/fd/{dfd}")).await else {
-                                            return;
-                                        };
-                                        scope = path.clone();
-                                        path.extend(&requested);
-                                        path
-                                    };
-
-                                    if !path.is_absolute() || path.starts_with("/proc") || path.starts_with("/sys") {
-                                        return;
-                                    }
-
-                                    let intermediaries = intermediaries(&path).await;
-                                    let violations = check_ownership(uid_gid, &scope, &intermediaries).await;
-                                    if violations.is_empty() {
-                                        return;
-                                    }
-
-                                    let violations_formatted = violations.into_iter().map(|(path, (owner, group))| {
-                                        let owner = match owner {
-                                            Who::OnlyRoot => Cow::from("only root user"),
-                                            Who::Someone(uid) => Cow::from(format!("uid {uid}")),
-                                            Who::Everyone => Cow::from("every user"),
-                                        };
-                                        let group = match group {
-                                            Who::OnlyRoot => Cow::from("only root group"),
-                                            Who::Someone(gid) => Cow::from(format!("gid {gid}")),
-                                            Who::Everyone => Cow::from("every group"),
-                                        };
-                                        format!("{}, writable by {owner} and {group}", path.to_string_lossy())
-                                    }).collect::<Vec<_>>().join(",\n");
-                                    let uid = uid_gid as u32;
-                                    let gid = (uid_gid >> 32) as u32;
-                                    let level = if uid == 0 || gid == 0 {
+                                    let uids = uids.into_iter().take_while(|i| *i != 0).map(|uid| get_user_by_uid(uid).map_or_else(|| uid.to_string(), |user| {
+                                        user.name().to_string_lossy().to_string()
+                                    })).collect::<Vec<_>>().join(",");
+                                    let gids = gids.into_iter().take_while(|i| *i != 0).map(|gid| get_group_by_gid(gid).map_or_else(|| gid.to_string(), |group| {
+                                        group.name().to_string_lossy().to_string()
+                                    })).collect::<Vec<_>>().join(",");
+                                    let level = if mask & 0x1 != 0 {
                                         Level::Error
-                                    } else {
+                                    } else if uid == 0 || gid == 0 {
                                         Level::Warn
+                                    } else {
+                                        Level::Info
                                     };
-                                    (format!("{context}, acting as uid {uid} and gid {gid}, invoked open on a file which could be intercepted at the following points:\n{violations_formatted}"), level)
+                                    let uid = get_user_by_uid(uid).map_or_else(|| uid.to_string(), |user| {
+                                        user.name().to_string_lossy().to_string()
+                                    });
+                                    let gid = get_group_by_gid(gid).map_or_else(|| gid.to_string(), |group| {
+                                        group.name().to_string_lossy().to_string()
+                                    });
+                                    let mut perms = Vec::new();
+                                    {
+                                        let mut i = 1;
+                                        static PERM_ITER: [&str; 8] = ["MAY_EXEC", "MAY_WRITE", "MAY_READ", "MAY_APPEND", "MAY_ACCESS", "MAY_OPEN", "MAY_CHDIR", "MAY_NOT_BLOCK"];
+                                        for perm in PERM_ITER {
+                                            if i & mask != 0 {
+                                                perms.push(perm);
+                                            }
+                                            i <<= 1;
+                                        }
+                                    }
+                                    let and_everyone = if everyone {
+                                        ", as well as everyone else"
+                                    } else {
+                                        ""
+                                    };
+                                    (format!("{context}, acting as {uid}:{gid}, attempted to access {filename} with {perms:?} ({mask:#x}), which may be intercepted by uids [{uids}] and gids [{gids}]{and_everyone}"), level)
                                 }
                                 OsSanitizerReport::Access { .. } => {
                                     (format!("{context} invoked access, which is a syscall wrapper explicitly warned against"), Level::Info)
@@ -649,26 +634,26 @@ async fn main() -> Result<(), anyhow::Error> {
 
                             let frame_iter = if let Some(resolver) = maybe_resolver.as_ref() {
                                 Either::Left(stacktrace.frames().iter().enumerate().chain(extra_stacktraces.iter().flat_map(|s| s.frames().iter().enumerate())).flat_map(|(i, frame)| {
-                                    if i > visibility_depth {
-                                        None
-                                    } else if i == visibility_depth {
-                                        Some(Cow::from("..."))
-                                    } else {
-                                        let spacing = if i == 0 { "\n" } else { "" };
-                                        Some(Cow::from(resolver.resolve_file_offset(frame.ip).map_or_else(
-                                            || format!("{spacing}#{i} 0x{:x}", frame.ip),
-                                            move |(path, offset)| {
-                                                if let Some(path) = path.to_str() {
-                                                    format!("{spacing}#{i} 0x{:x}  ({path}+0x{offset:x})", frame.ip)
-                                                } else {
-                                                    format!(
-                                                        "{spacing}#{i} 0x{:x}  {}+0x{offset:x} (name adjusted for utf-8 compat)",
-                                                        frame.ip,
-                                                        path.to_string_lossy()
-                                                    )
-                                                }
-                                            },
-                                        )))
+                                    match i.cmp(&visibility_depth) {
+                                        core::cmp::Ordering::Less => {
+                                            let spacing = if i == 0 { "\n" } else { "" };
+                                            Some(Cow::from(resolver.resolve_file_offset(frame.ip).map_or_else(
+                                                || format!("{spacing}#{i} 0x{:x}", frame.ip),
+                                                move |(path, offset)| {
+                                                    if let Some(path) = path.to_str() {
+                                                        format!("{spacing}#{i} 0x{:x}  ({path}+0x{offset:x})", frame.ip)
+                                                    } else {
+                                                        format!(
+                                                            "{spacing}#{i} 0x{:x}  {}+0x{offset:x} (name adjusted for utf-8 compat)",
+                                                            frame.ip,
+                                                            path.to_string_lossy()
+                                                        )
+                                                    }
+                                                },
+                                            )))
+                                        }
+                                        core::cmp::Ordering::Equal => Some(Cow::from("...")),
+                                        core::cmp::Ordering::Greater => None,
                                     }
                                 }))
                             } else {
@@ -678,13 +663,13 @@ async fn main() -> Result<(), anyhow::Error> {
                                         .iter()
                                         .enumerate().chain(extra_stacktraces.iter().flat_map(|s| s.frames().iter().enumerate()))
                                         .flat_map(|(i, frame)| {
-                                            if i > visibility_depth {
-                                                None
-                                            } else if i == visibility_depth {
-                                                Some(Cow::from("..."))
-                                            } else {
-                                                let spacing = if i == 0 { "\n" } else { "" };
-                                                Some(Cow::from(format!("{spacing}#{i} 0x{:x}", frame.ip)))
+                                            match i.cmp(&visibility_depth) {
+                                                core::cmp::Ordering::Less => {
+                                                    let spacing = if i == 0 { "\n" } else { "" };
+                                                    Some(Cow::from(format!("{spacing}#{i} 0x{:x}", frame.ip)))
+                                                }
+                                                core::cmp::Ordering::Equal => Some(Cow::from("...")),
+                                                core::cmp::Ordering::Greater => None,
                                             }
                                         }),
                                 )
@@ -912,12 +897,9 @@ async fn main() -> Result<(), anyhow::Error> {
 
     if args.interceptable_path {
         attach_lsm!(bpf, btf, "inode_permission", "open_permissions_inode");
-        attach_fentry!(
-            bpf,
-            btf,
-            "security_file_permission",
-            "open_permissions_file"
-        );
+        attach_fentry!(bpf, btf, "security_file_open", "open_permissions_file");
+        attach_fentry!(bpf, btf, "may_open");
+        attach_fentry!(bpf, btf, "path_openat", "clear_open_permissions");
     }
 
     if args.gets {

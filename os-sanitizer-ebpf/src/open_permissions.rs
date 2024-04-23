@@ -1,21 +1,27 @@
-use aya_ebpf::cty::{c_char, uintptr_t};
+use core::mem::offset_of;
+
+use aya_ebpf::cty::{c_char, c_void, uintptr_t};
+use aya_ebpf::helpers::gen::bpf_get_current_comm;
 use aya_ebpf::helpers::{bpf_d_path, bpf_get_current_pid_tgid};
 use aya_ebpf::maps::LruHashMap;
 use aya_ebpf::programs::{FEntryContext, LsmContext};
 use aya_ebpf::EbpfContext;
 use aya_ebpf_macros::{fentry, lsm, map};
-use core::mem::offset_of;
 
-use os_sanitizer_common::OsSanitizerError;
-use os_sanitizer_common::OsSanitizerError::{CouldntAccessBuffer, CouldntGetPath, Unreachable};
+use os_sanitizer_common::OsSanitizerError::{
+    CouldntAccessBuffer, CouldntGetComm, CouldntGetPath, Unreachable,
+};
 use os_sanitizer_common::OsSanitizerReport::UnsafeOpen;
+use os_sanitizer_common::{OsSanitizerError, EXECUTABLE_LEN};
 
 use crate::binding::{file, inode};
-use crate::{report_stack_id, STRING_SCRATCH};
+use crate::{report_stack_id, IGNORED_PIDS, STRING_SCRATCH};
 
 #[map]
-pub static PERMISSION_INODE_RECORD: LruHashMap<(u64, u64), ([u32; 16], [u32; 16], u64)> =
+pub static PERMISSION_INODE_RECORD: LruHashMap<u64, ([u32; 8], [u32; 8], bool)> =
     LruHashMap::with_max_entries(65536, 0);
+#[map]
+pub static MAY_OPEN_RECORD: LruHashMap<u64, u32> = LruHashMap::with_max_entries(65536, 0);
 
 #[lsm(hook = "inode_permission")]
 fn lsm_open_permissions_inode(ctx: LsmContext) -> i32 {
@@ -26,6 +32,12 @@ fn lsm_open_permissions_inode(ctx: LsmContext) -> i32 {
 }
 
 unsafe fn try_open_permissions_inode(ctx: &LsmContext) -> Result<(), OsSanitizerError> {
+    let pid_tgid = bpf_get_current_pid_tgid();
+
+    if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
+        return Ok(());
+    }
+
     let inode: *const inode = ctx.arg(0);
 
     let uid = ctx.uid();
@@ -33,24 +45,26 @@ unsafe fn try_open_permissions_inode(ctx: &LsmContext) -> Result<(), OsSanitizer
 
     let i_uid = (*inode).i_uid.val;
     let i_gid = (*inode).i_gid.val;
+    let i_mode = (*inode).i_mode;
 
     if (uid != i_uid && i_uid != 0) || (gid != i_gid && i_gid != 0) {
         // we know this will not race because we are accessing relevant to a particular pid_tgid
         // and we are not sleepable
         // we cannot modify in place as the map may be updated elsewhere, invalidating the entry
         let pid_tgid = bpf_get_current_pid_tgid();
-        let i_no = (*inode).i_ino;
-        let (mut uids, mut gids, stack_id) = if let Some((existing_uids, existing_gids, stack_id)) =
-            PERMISSION_INODE_RECORD.get(&(pid_tgid, i_no)).copied()
-        {
-            (existing_uids, existing_gids, stack_id)
-        } else {
-            ([0; 16], [0; 16], report_stack_id(ctx, "inode record")?)
-        };
+        let (mut uids, mut gids, mut everyone) =
+            if let Some((existing_uids, existing_gids, everyone)) =
+                PERMISSION_INODE_RECORD.get(&pid_tgid).copied()
+            {
+                (existing_uids, existing_gids, everyone)
+            } else {
+                ([0; 8], [0; 8], false)
+            };
 
         if uid != i_uid && i_uid != 0 {
             for i in 0..uids.len() {
                 if uids[i] == 0 || uids[i] == i_uid {
+                    // owners secretly may always write
                     uids[i] = i_uid;
                     break;
                 }
@@ -59,21 +73,52 @@ unsafe fn try_open_permissions_inode(ctx: &LsmContext) -> Result<(), OsSanitizer
         if gid != i_gid && i_gid != 0 {
             for i in 0..gids.len() {
                 if gids[i] == 0 || gids[i] == i_gid {
-                    gids[i] = i_gid;
+                    if i_mode & 0x10 != 0 {
+                        // this gid has write permissions
+                        gids[i] = i_gid;
+                    }
                     break;
                 }
             }
         }
 
+        if i_mode & 0x2 != 0 {
+            everyone = true;
+        }
+
         PERMISSION_INODE_RECORD
-            .insert(&(pid_tgid, i_no), &(uids, gids, stack_id), 0)
+            .insert(&pid_tgid, &(uids, gids, everyone), 0)
             .map_err(|_| OsSanitizerError::OutOfSpace("couldn't insert to inode record"))?;
     }
 
     Ok(())
 }
 
-#[fentry(function = "security_file_permission")]
+#[fentry(function = "may_open")]
+fn fentry_may_open(ctx: FEntryContext) -> i32 {
+    if let Err(e) = unsafe { try_may_open(&ctx) } {
+        crate::emit_error(&ctx, e, "may_open_fentry");
+    }
+    0
+}
+
+unsafe fn try_may_open(ctx: &FEntryContext) -> Result<(), OsSanitizerError> {
+    let pid_tgid = bpf_get_current_pid_tgid();
+
+    if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
+        return Ok(());
+    }
+
+    let acc_mode: u32 = ctx.arg(2);
+
+    MAY_OPEN_RECORD
+        .insert(&pid_tgid, &acc_mode, 0)
+        .map_err(|_| OsSanitizerError::OutOfSpace("couldn't insert to may_open record"))?;
+
+    Ok(())
+}
+
+#[fentry(function = "security_file_open")]
 fn fentry_open_permissions_file(ctx: FEntryContext) -> i32 {
     if let Err(e) = unsafe { try_open_permissions_file(&ctx) } {
         crate::emit_error(&ctx, e, "open_permissions_file_fentry");
@@ -82,44 +127,87 @@ fn fentry_open_permissions_file(ctx: FEntryContext) -> i32 {
 }
 
 unsafe fn try_open_permissions_file(ctx: &FEntryContext) -> Result<(), OsSanitizerError> {
-    let file: *const file = ctx.arg(0);
-
     let pid_tgid = bpf_get_current_pid_tgid();
-    let i_no = (*(*file).f_inode).i_ino;
 
-    if let Some((uids, gids, stack_id)) = PERMISSION_INODE_RECORD.get(&(pid_tgid, i_no)).copied() {
-        let mask: u32 = ctx.arg(1);
-        let inode_type = ((*(*file).f_inode).i_mode >> 8) as u8;
-        let ptr = STRING_SCRATCH
-            .get_ptr_mut(0)
-            .ok_or(CouldntAccessBuffer("emit-report"))?;
-        let filename = &mut *ptr;
-        let path = file as uintptr_t + offset_of!(file, f_path);
+    if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
+        return Ok(());
+    }
 
-        let res = bpf_d_path(
-            path as *mut aya_ebpf::bindings::path,
-            filename.as_mut_ptr() as *mut c_char,
-            filename.len() as u32,
-        );
-        if res < 0 {
-            return Err(CouldntGetPath("emit-report", res));
+    let file: *const file = ctx.arg(0);
+    let stack_id = report_stack_id(ctx, "stack eq check")?;
+
+    if let Some((uids, gids, everyone)) = PERMISSION_INODE_RECORD.get(&pid_tgid).copied() {
+        if let Some(mask) = MAY_OPEN_RECORD.get(&pid_tgid).copied() {
+            // discard the accumulated perms
+            let _ = PERMISSION_INODE_RECORD.remove(&pid_tgid);
+            let _ = MAY_OPEN_RECORD.remove(&pid_tgid);
+
+            if uids[0] == 0 && gids[0] == 0 && !everyone {
+                return Ok(()); // nothing to report
+            }
+
+            // let inode_type = ((*(*file).f_inode).i_mode >> 8) as u8;
+            let ptr = STRING_SCRATCH
+                .get_ptr_mut(0)
+                .ok_or(CouldntAccessBuffer("emit-report"))?;
+            if ptr == core::ptr::null_mut() {
+                return Err(Unreachable("unset string scratch pointer"));
+            }
+            let filename = &mut *ptr;
+            let path = file as uintptr_t + offset_of!(file, f_path);
+
+            let res = bpf_d_path(
+                path as *mut aya_ebpf::bindings::path,
+                filename.as_mut_ptr() as *mut c_char,
+                filename.len() as u32,
+            );
+            if res < 0 {
+                return Err(CouldntGetPath("emit-report", res));
+            }
+
+            if filename[0] == 0 {
+                return Ok(()); // nothing to report :(
+            }
+
+            let uid = ctx.uid();
+            let gid = ctx.gid();
+
+            let mut executable = [0u8; EXECUTABLE_LEN];
+
+            // we do this manually because the existing implementation is restricted to 16 bytes
+            let res = bpf_get_current_comm(
+                executable.as_mut_ptr() as *mut c_void,
+                executable.len() as u32,
+            );
+            if res < 0 {
+                return Err(CouldntGetComm("open permissions comm", res));
+            }
+
+            let report = UnsafeOpen {
+                executable,
+                uid,
+                gid,
+                pid_tgid,
+                stack_id,
+                filename,
+                uids,
+                gids,
+                mask,
+                everyone,
+            };
+
+            crate::emit_report(ctx, &report)?;
         }
-
-        let report = UnsafeOpen {
-            executable: ctx
-                .command()
-                .map_err(|_| Unreachable("not in an executable context"))?,
-            pid_tgid,
-            stack_id,
-            filename,
-            uids,
-            gids,
-            mask,
-            inode_type,
-        };
-
-        crate::emit_report(ctx, &report)?;
     }
 
     Ok(())
+}
+
+#[fentry(function = "path_openat")]
+fn fentry_clear_open_permissions(ctx: FEntryContext) -> i32 {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    // discard the accumulated perms
+    let _ = PERMISSION_INODE_RECORD.remove(&pid_tgid);
+    let _ = MAY_OPEN_RECORD.remove(&pid_tgid);
+    0
 }
