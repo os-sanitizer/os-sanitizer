@@ -169,6 +169,10 @@ unsafe fn try_open_permissions_file(ctx: &FEntryContext) -> Result<(), OsSanitiz
                 return Ok(()); // nothing to report :(
             }
 
+            if filename.starts_with(b"/dev") || filename.starts_with(b"/proc") {
+                return Ok(()); // generally not desireable to report
+            }
+
             let uid = ctx.uid();
             let gid = ctx.gid();
 
