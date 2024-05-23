@@ -74,11 +74,11 @@ impl FileOffsetResolver {
                 .unwrap();
             stdout.write_u8(b'\n').await.unwrap();
         }
-        let _ = Command::new("debuginfod-find")
+        let debuginfo_loc = Command::new("debuginfod-find")
             .arg("debuginfo")
             .arg(path.as_ref().as_os_str())
             //            .stdout(Stdio::null())
-            .status()
+            .output()
             .await;
         let mut cmd = if let Some(symbolizer) = std::env::var_os("LLVM_SYMBOLIZER") {
             Command::new(symbolizer)
@@ -90,15 +90,21 @@ impl FileOffsetResolver {
         } else {
             cmd.arg("--no-demangle");
         }
+        let mut path_ = path.as_ref().as_os_str().to_owned();
+        if let Ok(debuginfo_loc) = debuginfo_loc {
+            let loc = String::from_utf8_lossy(&debuginfo_loc.stdout);
+            let loc = PathBuf::from(loc.trim());
+            path_ = loc.as_os_str().to_owned();
+        }
         let mut symbolizer = cmd
             .args([
-                "--debuginfod",
+                // "--debuginfod", <- not available in packaged LLVM?
                 "--inlines",
                 "--relative-address",
                 "--output-style=JSON",
                 "-e",
             ])
-            .arg(path.as_ref().as_os_str())
+            .arg(path_)
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .stdin(Stdio::piped())
