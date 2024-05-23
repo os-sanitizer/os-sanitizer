@@ -1,4 +1,3 @@
-#![feature(byte_slice_trim_ascii)]
 #![no_std]
 #![no_main]
 

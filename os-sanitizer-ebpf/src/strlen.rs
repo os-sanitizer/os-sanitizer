@@ -1,7 +1,7 @@
 use aya_ebpf::cty::{size_t, uintptr_t};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::maps::{HashMap, LruHashMap};
-use aya_ebpf::programs::ProbeContext;
+use aya_ebpf::programs::{ProbeContext, RetProbeContext};
 use aya_ebpf_macros::{map, uprobe, uretprobe};
 
 use os_sanitizer_common::OsSanitizerError;
@@ -46,7 +46,7 @@ unsafe fn try_uprobe_strlen(probe: &ProbeContext) -> Result<u32, OsSanitizerErro
 }
 
 #[uretprobe]
-fn uretprobe_strlen(probe: ProbeContext) -> u32 {
+fn uretprobe_strlen(probe: RetProbeContext) -> u32 {
     match unsafe { try_uretprobe_strlen(&probe) } {
         Ok(res) => res,
         Err(e) => crate::emit_error(&probe, e, "os_sanitizer_strlen_uretprobe"),
@@ -54,7 +54,7 @@ fn uretprobe_strlen(probe: ProbeContext) -> u32 {
 }
 
 #[inline(always)]
-unsafe fn try_uretprobe_strlen(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
+unsafe fn try_uretprobe_strlen(probe: &RetProbeContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
