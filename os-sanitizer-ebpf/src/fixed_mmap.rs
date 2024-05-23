@@ -5,7 +5,7 @@ use aya_ebpf::cty::{c_long, c_void};
 use aya_ebpf::helpers::gen::bpf_get_current_comm;
 use aya_ebpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
 use aya_ebpf::maps::LruHashMap;
-use aya_ebpf::programs::{FEntryContext, ProbeContext};
+use aya_ebpf::programs::{FEntryContext, ProbeContext, RetProbeContext};
 use aya_ebpf_macros::{fentry, map, uprobe, uretprobe};
 
 use os_sanitizer_common::OsSanitizerError::{
@@ -114,7 +114,7 @@ fn uprobe_fixed_mmap_safe_function(probe: ProbeContext) -> u32 {
 }
 
 #[uretprobe]
-fn uretprobe_fixed_mmap_safe_function(_probe: ProbeContext) -> u32 {
+fn uretprobe_fixed_mmap_safe_function(_probe: RetProbeContext) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
     let _ = FIXED_MMAP_SAFE_WRAPPED.remove(&pid_tgid); // don't care if this fails
     0

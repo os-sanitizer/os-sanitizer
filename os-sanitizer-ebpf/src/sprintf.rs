@@ -2,7 +2,7 @@ use aya_ebpf::cty::{c_void, uintptr_t};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::helpers::gen::bpf_get_current_comm;
 use aya_ebpf::maps::LruHashMap;
-use aya_ebpf::programs::ProbeContext;
+use aya_ebpf::programs::{ProbeContext, RetProbeContext};
 use aya_ebpf_macros::{map, uprobe, uretprobe};
 
 use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, Unreachable};
@@ -27,7 +27,7 @@ fn uprobe_sprintf_safe_wrapper(probe: ProbeContext) -> u32 {
 }
 
 #[uretprobe]
-fn uretprobe_sprintf_safe_wrapper(_probe: ProbeContext) -> u32 {
+fn uretprobe_sprintf_safe_wrapper(_probe: RetProbeContext) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
     let _ = SPRINTF_SAFE_WRAPPED.remove(&pid_tgid); // don't care if this fails
     0

@@ -2,7 +2,7 @@ use aya_ebpf::cty::{c_int, c_void, size_t, uintptr_t};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::helpers::gen::bpf_get_current_comm;
 use aya_ebpf::maps::LruHashMap;
-use aya_ebpf::programs::{FEntryContext, ProbeContext};
+use aya_ebpf::programs::{FEntryContext, ProbeContext, RetProbeContext};
 use aya_ebpf::EbpfContext;
 use aya_ebpf_macros::{fentry, map, uprobe, uretprobe};
 
@@ -28,7 +28,7 @@ fn uprobe_snprintf_safe_wrapper(probe: ProbeContext) -> u32 {
 }
 
 #[uretprobe]
-fn uretprobe_snprintf_safe_wrapper(_probe: ProbeContext) -> u32 {
+fn uretprobe_snprintf_safe_wrapper(_probe: RetProbeContext) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
     let _ = SNPRINTF_SAFE_WRAPPED.remove(&pid_tgid); // don't care if this fails
     0
@@ -73,7 +73,7 @@ unsafe fn try_uprobe_snprintf(probe: &ProbeContext) -> Result<u32, OsSanitizerEr
 }
 
 #[uretprobe]
-fn uretprobe_snprintf(probe: ProbeContext) -> u32 {
+fn uretprobe_snprintf(probe: RetProbeContext) -> u32 {
     match unsafe { try_uretprobe_snprintf(&probe) } {
         Ok(res) => res,
         Err(e) => crate::emit_error(&probe, e, "os_sanitizer_snprintf_uretprobe"),
@@ -81,7 +81,7 @@ fn uretprobe_snprintf(probe: ProbeContext) -> u32 {
 }
 
 #[inline(always)]
-unsafe fn try_uretprobe_snprintf(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
+unsafe fn try_uretprobe_snprintf(probe: &RetProbeContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
