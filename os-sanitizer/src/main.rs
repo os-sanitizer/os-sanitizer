@@ -828,7 +828,7 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     if args.strncpy {
-        attach_uprobe_and_uretprobe!(bpf, "strcpy_safe_wrapper", ["libglib-2.0", "g_strndup"]);
+        attach_uprobe_and_uretprobe!(bpf, "strncpy_safe_wrapper", ["libglib-2.0", "g_strndup"]);
         attach_uprobe!(
             bpf,
             "strncpy",
