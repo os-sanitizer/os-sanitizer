@@ -840,7 +840,42 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     if args.memcpy {
-        attach_uprobe!(bpf, "memcpy", ["libc", "__memcpy_avx_unaligned_erms"]);
+        attach_uprobe!(
+            bpf,
+            "memcpy",
+            ["libc", "__memcpy_avx_unaligned_erms"],
+            ["libc", "__memcpy_avx_unaligned_erms_rtm"],
+            ["libc", "__memcpy_avx512_no_vzeroupper"],
+            ["libc", "__memcpy_avx512_unaligned_erms"],
+            ["libc", "__memcpy_erms"],
+            ["libc", "__memcpy_evex_unaligned_erms"],
+            ["libc", "__memcpy_sse2_unaligned_erms"],
+            ["libc", "__memcpy_ssse3"],
+            ["libc", "__memcpy_chk_avx_unaligned_erms"],
+            ["libc", "__memcpy_chk_avx_unaligned_erms_rtm"],
+            ["libc", "__memcpy_chk_avx512_no_vzeroupper"],
+            ["libc", "__memcpy_chk_avx512_unaligned_erms"],
+            ["libc", "__memcpy_chk_erms"],
+            ["libc", "__memcpy_chk_evex_unaligned_erms"],
+            ["libc", "__memcpy_chk_sse2_unaligned_erms"],
+            ["libc", "__memcpy_chk_ssse3"],
+            ["libc", "__mempcpy_avx_unaligned_erms"],
+            ["libc", "__mempcpy_avx_unaligned_erms_rtm"],
+            ["libc", "__mempcpy_avx512_no_vzeroupper"],
+            ["libc", "__mempcpy_avx512_unaligned_erms"],
+            ["libc", "__mempcpy_erms"],
+            ["libc", "__mempcpy_evex_unaligned_erms"],
+            ["libc", "__mempcpy_sse2_unaligned_erms"],
+            ["libc", "__mempcpy_ssse3"],
+            ["libc", "__mempcpy_chk_avx_unaligned_erms"],
+            ["libc", "__mempcpy_chk_avx_unaligned_erms_rtm"],
+            ["libc", "__mempcpy_chk_avx512_no_vzeroupper"],
+            ["libc", "__mempcpy_chk_avx512_unaligned_erms"],
+            ["libc", "__mempcpy_chk_erms"],
+            ["libc", "__mempcpy_chk_evex_unaligned_erms"],
+            ["libc", "__mempcpy_chk_sse2_unaligned_erms"],
+            ["libc", "__mempcpy_chk_ssse3"],
+        );
     }
 
     if args.filep_unlocked {
