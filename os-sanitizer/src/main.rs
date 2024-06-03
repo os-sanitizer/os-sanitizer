@@ -706,7 +706,15 @@ async fn main() -> Result<(), anyhow::Error> {
             bpf,
             "strlen",
             ["libc", "__strlen_avx2"],
-            ["libc", "__strnlen_avx2"]
+            ["libc", "__strlen_avx2_rtm"],
+            ["libc", "__strlen_sse2"],
+            ["libc", "__strlen_evex"],
+            ["libc", "__strlen_evex512"],
+            ["libc", "__strnlen_avx2"],
+            ["libc", "__strnlen_avx2_rtm"],
+            ["libc", "__strnlen_sse2"],
+            ["libc", "__strnlen_evex"],
+            ["libc", "__strnlen_evex512"]
         );
     }
 
@@ -761,7 +769,15 @@ async fn main() -> Result<(), anyhow::Error> {
             ["libfontconfig", "FcFreeTypeQuery"],
             ["libfontconfig", "FcFreeTypeQueryAll"],
         );
-        attach_uprobe!(bpf, "strcpy", ["libc", "__strcpy_avx2"]);
+        attach_uprobe!(
+            bpf,
+            "strcpy",
+            ["libc", "__strcpy_avx2"],
+            ["libc", "__strcpy_avx2_rtm"],
+            ["libc", "__strcpy_sse2"],
+            ["libc", "__strcpy_sse2_unaligned"],
+            ["libc", "__strcpy_evex"]
+        );
     }
 
     if args.printf_mutability {
@@ -812,7 +828,15 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     if args.strncpy {
-        attach_uprobe!(bpf, "strncpy", ["libc", "__strncpy_avx2"]);
+        attach_uprobe_and_uretprobe!(bpf, "strcpy_safe_wrapper", ["libglib-2.0", "g_strndup"]);
+        attach_uprobe!(
+            bpf,
+            "strncpy",
+            ["libc", "__strncpy_avx2"],
+            ["libc", "__strncpy_avx2_rtm"],
+            ["libc", "__strncpy_sse2_unaligned"],
+            ["libc", "__strncpy_evex"]
+        );
     }
 
     if args.memcpy {

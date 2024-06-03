@@ -1,13 +1,37 @@
 use aya_ebpf::cty::{c_void, size_t, uintptr_t};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::helpers::gen::bpf_get_current_comm;
-use aya_ebpf::programs::ProbeContext;
-use aya_ebpf_macros::uprobe;
+use aya_ebpf::maps::LruHashMap;
+use aya_ebpf::programs::{ProbeContext, RetProbeContext};
+use aya_ebpf_macros::{map, uprobe, uretprobe};
 
 use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, Unreachable};
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
 
 use crate::{emit_report, IGNORED_PIDS};
+
+#[map]
+static STRNCPY_SAFE_WRAPPED: LruHashMap<u64, u8> = LruHashMap::with_max_entries(1 << 16, 0);
+
+#[uprobe]
+fn uprobe_strncpy_safe_wrapper(probe: ProbeContext) -> u32 {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    match STRNCPY_SAFE_WRAPPED.insert(&pid_tgid, &0, 0) {
+        Ok(_) => 0,
+        Err(_) => crate::emit_error(
+            &probe,
+            Unreachable("Couldn't insert into STRNCPY_SAFE_WRAPPED"),
+            "uprobe_strncpy_safe_wrapper",
+        ),
+    }
+}
+
+#[uretprobe]
+fn uretprobe_strncpy_safe_wrapper(_probe: RetProbeContext) -> u32 {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let _ = STRNCPY_SAFE_WRAPPED.remove(&pid_tgid); // don't care if this fails
+    0
+}
 
 #[uprobe]
 fn uprobe_strncpy(probe: ProbeContext) -> u32 {
@@ -22,6 +46,10 @@ unsafe fn try_uprobe_strncpy(probe: &ProbeContext) -> Result<u32, OsSanitizerErr
     let pid_tgid = bpf_get_current_pid_tgid();
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
+        return Ok(0);
+    }
+
+    if STRNCPY_SAFE_WRAPPED.get(&pid_tgid).is_some() {
         return Ok(0);
     }
 
