@@ -21,7 +21,7 @@ struct Args {
     files: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "PascalCase")]
 struct LLVMAddrSymbol {
     #[serde(deserialize_with = "non_zero")]
@@ -93,12 +93,13 @@ impl FileOffsetResolver {
         let mut path_ = path.as_ref().as_os_str().to_owned();
         if let Ok(debuginfo_loc) = debuginfo_loc {
             let loc = String::from_utf8_lossy(&debuginfo_loc.stdout);
-            let loc = PathBuf::from(loc.trim());
-            path_ = loc.as_os_str().to_owned();
+            if !loc.is_empty() {
+                let loc = PathBuf::from(loc.trim());
+                path_ = loc.as_os_str().to_owned();
+            }
         }
         let mut symbolizer = cmd
             .args([
-                // "--debuginfod", <- not available in packaged LLVM?
                 "--inlines",
                 "--relative-address",
                 "--output-style=JSON",
