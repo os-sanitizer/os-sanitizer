@@ -64,7 +64,7 @@ fn fentry_set_fs_pwd_lv(ctx: FEntryContext) -> u32 {
 }
 
 unsafe fn try_fentry_set_fs_pwd_lv(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
-    let pid = bpf_get_current_pid_tgid() as u32;
+    let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
     if let Some(&(old_pid, old_uid, setuid)) = FORK_OBSERVED.get(&pid) {
         let stack_id = crate::report_stack_id(ctx, "leaky-vessel fchdir")?;
 
@@ -86,7 +86,7 @@ fn lsm_setuid_lv(ctx: LsmContext) -> i32 {
 }
 
 unsafe fn try_lsm_setuid_lv(ctx: &LsmContext) -> Result<(), OsSanitizerError> {
-    let pid = bpf_get_current_pid_tgid() as u32;
+    let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
     if let Some(&(orig_pid, uid, setuid)) = FORK_OBSERVED.get(&pid) {
         if setuid == 0 {
             let setuid = crate::report_stack_id(ctx, "leaky-vessel fchdir")?;

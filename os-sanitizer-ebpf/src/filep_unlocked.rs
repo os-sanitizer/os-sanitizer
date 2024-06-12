@@ -17,9 +17,7 @@ static UNLOCKED_USED_FILE_POINTERS: LruHashMap<(u64, u64), u64> =
 
 #[inline(always)]
 unsafe fn check_filep_usage(probe: &ProbeContext, pid_tgid: u64, filep: u64) {
-    if let Some(&orig_pid_tgid) =
-        UNLOCKED_USED_FILE_POINTERS.get(&((pid_tgid as u32) as u64, filep))
-    {
+    if let Some(&orig_pid_tgid) = UNLOCKED_USED_FILE_POINTERS.get(&(pid_tgid >> 32, filep)) {
         if orig_pid_tgid != pid_tgid {
             #[inline(always)]
             unsafe fn report(probe: &ProbeContext, pid_tgid: u64) -> Result<(), OsSanitizerError> {
@@ -66,7 +64,7 @@ macro_rules! define_filep_usage {
                     check_filep_usage(&probe, pid_tgid, filep);
                 }
 
-                match UNLOCKED_USED_FILE_POINTERS.insert(&((pid_tgid as u32) as u64, filep), &pid_tgid, 0) {
+                match UNLOCKED_USED_FILE_POINTERS.insert(&(pid_tgid >> 32, filep), &pid_tgid, 0) {
                     Ok(_) => 0,
                     Err(_) => emit_error(
                         &probe,

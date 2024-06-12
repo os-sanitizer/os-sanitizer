@@ -53,7 +53,6 @@ unsafe fn try_open_permissions_inode(ctx: &LsmContext) -> Result<(), OsSanitizer
         // we know this will not race because we are accessing relevant to a particular pid_tgid
         // and we are not sleepable
         // we cannot modify in place as the map may be updated elsewhere, invalidating the entry
-        let pid_tgid = bpf_get_current_pid_tgid();
         let (mut uids, mut gids, mut everyone) =
             if let Some((existing_uids, existing_gids, everyone)) =
                 PERMISSION_INODE_RECORD.get(&pid_tgid).copied()
