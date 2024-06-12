@@ -380,7 +380,7 @@ async fn main() -> Result<(), anyhow::Error> {
                         let stacktraces = stacktraces.clone();
                         let cached_procmaps = cached_procmaps.clone();
                         task::spawn(async move {
-                            let (executable, pid, tgid, stacktrace) = match report {
+                            let (executable, pid, thread, stacktrace) = match report {
                                 OsSanitizerReport::PrintfMutability { executable, pid_tgid, stack_id, .. }
                                 | OsSanitizerReport::SystemMutability { executable, pid_tgid, stack_id, .. }
                                 | OsSanitizerReport::SystemAbsolute { executable, pid_tgid, stack_id, .. }
@@ -435,10 +435,10 @@ async fn main() -> Result<(), anyhow::Error> {
                             // not actually allocated unless we give an element
                             let mut extra_stacktraces = Vec::new();
 
-                            let context = if pid == tgid {
+                            let context = if pid == thread {
                                 format!("{executable} (pid: {pid})")
                             } else {
-                                format!("{executable} (pid: {pid}, thread: {tgid})")
+                                format!("{executable} (pid: {pid}, thread: {thread})")
                             };
 
                             let (message, level) = match report {
