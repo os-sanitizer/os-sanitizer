@@ -209,6 +209,15 @@ pub enum OsSanitizerReport {
         protection: u64,
         variant: FixedMmapViolation,
     },
+    LeakyVessel {
+        executable: [u8; EXECUTABLE_LEN],
+        pid_tgid: u64,
+        stack_id: u64,
+        orig_pid: u32,
+        orig_uid: u32,
+        chdir_stack: u64,
+        setuid_stack: u64,
+    },
 }
 
 trait SerialisedContent {
@@ -280,6 +289,7 @@ impl OsSanitizerReport {
             OsSanitizerReport::Gets { .. } => 12,
             OsSanitizerReport::FixedMmap { .. } => 13,
             OsSanitizerReport::UnsafeOpen { .. } => 14,
+            OsSanitizerReport::LeakyVessel { .. } => 15,
         }])?;
         let buf = match self {
             OsSanitizerReport::RwxVma {
@@ -364,6 +374,12 @@ impl OsSanitizerReport {
                 stack_id,
             }
             | OsSanitizerReport::FixedMmap {
+                executable,
+                pid_tgid,
+                stack_id,
+                ..
+            }
+            | OsSanitizerReport::LeakyVessel {
                 executable,
                 pid_tgid,
                 stack_id,
@@ -521,6 +537,18 @@ impl OsSanitizerReport {
                     FixedMmapViolation::FixedMmapUnmapped => 1,
                     FixedMmapViolation::FixedMmapBadProt => 2,
                 }
+            }
+            OsSanitizerReport::LeakyVessel {
+                orig_pid,
+                orig_uid,
+                chdir_stack,
+                setuid_stack,
+                ..
+            } => {
+                buf.write(&orig_pid.to_be_bytes())?
+                    .write(&orig_uid.to_be_bytes())?
+                    .write(&chdir_stack.to_be_bytes())?
+                    .write(&setuid_stack.to_be_bytes())?;
             }
         }
         Ok(())
@@ -802,6 +830,28 @@ impl TryFrom<&[u8]> for OsSanitizerReport {
                     gids,
                     mask,
                     everyone,
+                }
+            }
+            15 => {
+                let mut orig_pid = 0;
+                let mut orig_uid = 0;
+                let mut chdir_stack = 0;
+                let mut setuid_stack = 0;
+
+                value
+                    .read_u32(&mut orig_pid)?
+                    .read_u32(&mut orig_uid)?
+                    .read_u64(&mut chdir_stack)?
+                    .read_u64(&mut setuid_stack)?;
+
+                OsSanitizerReport::LeakyVessel {
+                    executable,
+                    pid_tgid,
+                    stack_id,
+                    orig_pid,
+                    orig_uid,
+                    chdir_stack,
+                    setuid_stack,
                 }
             }
             _ => {

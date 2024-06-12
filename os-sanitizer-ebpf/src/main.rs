@@ -36,6 +36,7 @@ mod do_faccessat;
 mod do_statx;
 mod filep_unlocked;
 mod fixed_mmap;
+mod leaky_vessel;
 mod memcpy;
 mod open_permissions;
 mod printf_mutability;

@@ -11,11 +11,9 @@ use std::{
     },
 };
 
-use aya::programs::Lsm;
 use aya::{
     include_bytes_aligned,
     maps::{AsyncPerfEventArray, HashMap as AyaHashMap, StackTraceMap},
-    programs::FEntry,
     util::online_cpus,
     Btf, Ebpf,
 };
@@ -53,7 +51,7 @@ macro_rules! attach_fentry {
 
         print!("loading {} (fentry: {})...", $progname, $name);
         let _ = std::io::stdout().lock().flush();
-        let program: &mut FEntry = $bpf
+        let program: &mut ::aya::programs::FEntry = $bpf
             .program_mut(concat!("fentry_", $progname))
             .unwrap()
             .try_into()?;
@@ -74,7 +72,7 @@ macro_rules! attach_lsm {
 
         print!("loading {} (lsm: {})...", $progname, $name);
         let _ = std::io::stdout().lock().flush();
-        let program: &mut Lsm = $bpf
+        let program: &mut ::aya::programs::Lsm = $bpf
             .program_mut(concat!("lsm_", $progname))
             .unwrap()
             .try_into()?;
@@ -85,6 +83,39 @@ macro_rules! attach_lsm {
 
     ($bpf: expr, $btf: expr, $name: literal) => {
         attach_lsm!($bpf, $btf, $name, $name)
+    };
+}
+
+macro_rules! attach_many_tracepoint {
+    ($program: ident, $progname: literal, [$category: literal, $name: literal]) => {
+        #[allow(unused_imports)]
+        use ::std::io::Write as _;
+
+        print!("attaching {} to {}/{}...", $progname, $category, $name);
+        $program.attach($category, $name)?;
+        println!("done")
+    };
+
+    ($program: ident, $progname: literal, [$category: literal, $name: literal], $([$categories: literal, $names: literal]),+) => {
+        attach_many_tracepoint!($program, $progname, [$category, $name]);
+        attach_many_tracepoint!($program, $progname, $([$categories, $names]),+)
+    };
+}
+
+macro_rules! attach_tracepoint {
+    ($bpf: expr, $progname: literal, $([$categories: literal, $names: literal]),+$(,)?) => {
+        #[allow(unused_imports)]
+        use ::std::io::Write as _;
+
+        print!("loading tracepoint_{}...", $progname);
+        let _ = std::io::stdout().lock().flush();
+        let program: &mut ::aya::programs::TracePoint = $bpf
+            .program_mut(concat!("tracepoint_", $progname))
+            .unwrap()
+            .try_into()?;
+        program.load()?;
+        println!("done");
+        attach_many_tracepoint!(program, $progname, $([$categories, $names]),+)
     };
 }
 
@@ -103,17 +134,7 @@ macro_rules! attach_many_uprobe_uretprobe {
     };
 
     ($program: ident, $name: literal, $variant: literal, [$library: literal, $function: literal], $([$libraries: literal, $functions: literal]),+) => {
-        #[allow(unused_imports)]
-        use ::std::io::Write as _;
-
-        let demangled = ::cpp_demangle::BorrowedSymbol::new($function.as_bytes()).ok().and_then(|mangled| mangled.demangle(&DEMANGLE_OPTIONS).ok()).unwrap_or_else(|| $function.to_string());
-        print!("attaching {} {} to {}:{}...", $name, $variant, $library, demangled);
-        let _ = std::io::stdout().lock().flush();
-        if let Err(e) = $program.attach(Some($function), 0, $library, None) {
-            println!("failed: {e}");
-        } else {
-            println!("done");
-        }
+        attach_many_uprobe_uretprobe!($program, $name, $variant, [$library, $function]);
         attach_many_uprobe_uretprobe!($program, $name, $variant, $([$libraries, $functions]),+)
     };
 }
@@ -228,6 +249,11 @@ struct Args {
         help = "Log violations of open being used on interceptable paths"
     )]
     interceptable_path: bool,
+    #[arg(
+        long,
+        help = "Log potential Leaky Vessel issues; see: https://www.bleepingcomputer.com/news/security/leaky-vessels-flaws-allow-hackers-to-escape-docker-runc-containers"
+    )]
+    leaky_vessel: bool,
 
     #[arg(long, help = "Enable all reporting strategies")]
     all: bool,
@@ -262,6 +288,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.filep_unlocked = true;
         args.fixed_mmap = true;
         args.interceptable_path = true;
+        args.leaky_vessel = true;
     }
 
     if !(args.access
@@ -278,7 +305,8 @@ async fn main() -> Result<(), anyhow::Error> {
         || args.system_absolute
         || args.filep_unlocked
         || args.fixed_mmap
-        || args.interceptable_path)
+        || args.interceptable_path
+        || args.leaky_vessel)
     {
         eprintln!("You must specify one of the modes.");
         <Args as CommandFactory>::command().print_help()?;
@@ -368,6 +396,7 @@ async fn main() -> Result<(), anyhow::Error> {
                                 | OsSanitizerReport::Gets { executable, pid_tgid, stack_id, .. }
                                 | OsSanitizerReport::RwxVma { executable, pid_tgid, stack_id, .. }
                                 | OsSanitizerReport::FixedMmap { executable, pid_tgid, stack_id, .. }
+                                | OsSanitizerReport::LeakyVessel { executable, pid_tgid, stack_id, .. }
                                 => {
                                     let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
                                         warn!("Couldn't recover the name of an executable.");
@@ -630,6 +659,28 @@ async fn main() -> Result<(), anyhow::Error> {
                                             (format!("{context} mapped a memory region with MAP_FIXED on a memory region which was allocated with non-zero protections"), Level::Info)
                                         }
                                     }
+                                }
+                                OsSanitizerReport::LeakyVessel { orig_pid, orig_uid, chdir_stack, setuid_stack, .. } => {
+                                    let (msg, level) = if setuid_stack != 0 {
+                                        let Ok(stacktrace) = stacktraces.get(&(setuid_stack as u32), 0) else {
+                                            warn!("Couldn't recover the stacktrace of the executable {executable}.");
+                                            return;
+                                        };
+                                        extra_stacktraces.push(stacktrace);
+                                        ("running as root before performing setuid", Level::Error)
+                                    } else if orig_uid != 0 {
+                                        ("a low-privilege process", Level::Info)
+                                    } else {
+                                        ("running as root", Level::Warn)
+                                    };
+
+                                    let Ok(stacktrace) = stacktraces.get(&(chdir_stack as u32), 0) else {
+                                        warn!("Couldn't recover the stacktrace of the executable {executable}.");
+                                        return;
+                                    };
+                                    extra_stacktraces.push(stacktrace);
+
+                                    (format!("{context} (originally pid: {orig_pid}), {msg}, exec'd after chdir following fork, which may constitute a leaky vessel vulnerability"), level)
                                 }
                             };
 
@@ -983,6 +1034,18 @@ async fn main() -> Result<(), anyhow::Error> {
             ["ld-linux-x86-64", "_dl_map_object"],
             ["libc", "alloc_new_heap"]
         );
+    }
+
+    if args.leaky_vessel {
+        attach_tracepoint!(
+            bpf,
+            "execveat_lv",
+            ["syscalls", "sys_enter_execve"],
+            ["syscalls", "sys_enter_execveat"]
+        );
+        attach_fentry!(bpf, btf, "set_fs_pwd", "set_fs_pwd_lv");
+        attach_lsm!(bpf, btf, "task_fix_setuid", "setuid_lv");
+        attach_tracepoint!(bpf, "fork_lv", ["sched", "sched_process_fork"]);
     }
 
     signal::ctrl_c().await?;
