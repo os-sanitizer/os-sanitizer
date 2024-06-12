@@ -436,9 +436,9 @@ async fn main() -> Result<(), anyhow::Error> {
                             let mut extra_stacktraces = Vec::new();
 
                             let context = if pid == tgid {
-                                format!("{executable} (pid: {pid})")
+                                format!("{executable} (pid: {tgid})")
                             } else {
-                                format!("{executable} (pid: {pid}, thread: {tgid})")
+                                format!("{executable} (pid: {tgid}, thread: {pid})")
                             };
 
                             let (message, level) = match report {
