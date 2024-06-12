@@ -1000,6 +1000,7 @@ async fn main() -> Result<(), anyhow::Error> {
             ["libc", "fread"],
             ["libc", "fwrite"],
         );
+        attach_uprobe!(bpf, "fclose_unlocked", ["libc", "fclose"],);
     }
 
     if args.access {

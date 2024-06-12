@@ -15,6 +15,16 @@ use crate::{emit_error, emit_report};
 static UNLOCKED_USED_FILE_POINTERS: LruHashMap<(u64, u64), u64> =
     LruHashMap::with_max_entries(1 << 16, 0);
 
+#[uprobe]
+fn uprobe_fclose_unlocked(probe: ProbeContext) -> u32 {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    if let Some(filep) = probe.arg::<u64>(0) {
+        // ignore the result; this is only a sanity check
+        let _ = UNLOCKED_USED_FILE_POINTERS.remove(&(pid_tgid >> 32, filep));
+    }
+    0
+}
+
 #[inline(always)]
 unsafe fn check_filep_usage(probe: &ProbeContext, pid_tgid: u64, filep: u64) {
     if let Some(&orig_pid_tgid) = UNLOCKED_USED_FILE_POINTERS.get(&(pid_tgid >> 32, filep)) {
