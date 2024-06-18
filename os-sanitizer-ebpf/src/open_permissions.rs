@@ -49,7 +49,7 @@ unsafe fn try_open_permissions_inode(ctx: &LsmContext) -> Result<(), OsSanitizer
     let i_gid = (*inode).i_gid.val;
     let i_mode = (*inode).i_mode;
 
-    if (uid != i_uid && i_uid != 0) || (gid != i_gid && i_gid != 0) {
+    if (uid != i_uid && i_uid != 0) || (gid != i_gid && i_gid != 0) || i_mode & 0x2 != 0 {
         // we know this will not race because we are accessing relevant to a particular pid_tgid
         // and we are not sleepable
         // we cannot modify in place as the map may be updated elsewhere, invalidating the entry
