@@ -18,6 +18,9 @@
 
 #include <stdio.h>
 
+// forward declare -- this is not provided in stdio and causes a compiler error
+extern char *gets(char *s);
+
 int main ()
 {
     printf("Let's try gets.\n");
