@@ -1,0 +1,15 @@
+01_access
+02_gets
+03_rwx_mem
+04_memcpy
+04_strncpy
+04_strcpy
+05_security_file_open
+06_sprintf
+07_snprintf
+08_printf_mutability
+09_system_mutability
+10_system_abs
+11_filep_unlocked
+12_fixed_mmap
+13_interceptable_path
