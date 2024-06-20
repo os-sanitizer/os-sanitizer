@@ -26,6 +26,7 @@ cargo xtask build-ebpf --release
 ```
 
 Users of older kernels (version <6) may need to additionally add the `--compat` flag.
+You may optionally also enable statistics tracking ("how many times was each program used?") by passing the `--tracking` flag.
 
 ## Build Userspace
 
