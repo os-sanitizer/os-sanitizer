@@ -12,10 +12,11 @@ use os_sanitizer_common::OsSanitizerError::{
     CouldntFindVma, CouldntGetComm, UnexpectedNull, Unreachable,
 };
 use os_sanitizer_common::{
-    FixedMmapViolation, OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN,
+    FixedMmapViolation, OsSanitizerError, OsSanitizerReport, PassId, EXECUTABLE_LEN,
 };
 
 use crate::binding::vm_area_struct;
+use crate::statistics::update_tracking;
 use crate::{access_vm_flags, emit_report, IGNORED_PIDS};
 
 const MAP_FIXED: c_ulong = 16; // manually determined
@@ -103,6 +104,7 @@ static FIXED_MMAP_SAFE_WRAPPED: LruHashMap<u64, u8> = LruHashMap::with_max_entri
 #[uprobe]
 fn uprobe_fixed_mmap_safe_function(probe: ProbeContext) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
+    update_tracking(pid_tgid, PassId::uprobe_fixed_mmap_safe_function);
     match FIXED_MMAP_SAFE_WRAPPED.insert(&pid_tgid, &0, 0) {
         Ok(_) => 0,
         Err(_) => crate::emit_error(
@@ -116,6 +118,7 @@ fn uprobe_fixed_mmap_safe_function(probe: ProbeContext) -> u32 {
 #[uretprobe]
 fn uretprobe_fixed_mmap_safe_function(_probe: RetProbeContext) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
+    update_tracking(pid_tgid, PassId::uretprobe_fixed_mmap_safe_function);
     let _ = FIXED_MMAP_SAFE_WRAPPED.remove(&pid_tgid); // don't care if this fails
     0
 }
@@ -130,6 +133,7 @@ fn fentry_fixed_mmap(probe: FEntryContext) -> u32 {
 
 unsafe fn try_fentry_fixed_mmap(probe: &FEntryContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
+    update_tracking(pid_tgid, PassId::fentry_fixed_mmap);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(0);

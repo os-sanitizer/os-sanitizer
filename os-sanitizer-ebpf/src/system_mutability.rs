@@ -8,9 +8,10 @@ use aya_ebpf_macros::uprobe;
 use os_sanitizer_common::OsSanitizerError::{
     CouldntFindVma, CouldntGetComm, UnexpectedNull, Unreachable,
 };
-use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
+use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, PassId, EXECUTABLE_LEN};
 
 use crate::binding::vm_area_struct;
+use crate::statistics::update_tracking;
 use crate::{access_vm_flags, emit_report, read_str, IGNORED_PIDS};
 
 #[repr(C)]
@@ -82,6 +83,7 @@ unsafe extern "C" fn system_mutability_callback(
 #[inline(always)]
 unsafe fn check_system_mutability(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
+    update_tracking(pid_tgid, PassId::check_system_mutability);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(0);

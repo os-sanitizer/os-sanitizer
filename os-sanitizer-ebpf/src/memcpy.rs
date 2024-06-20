@@ -5,8 +5,9 @@ use aya_ebpf::programs::ProbeContext;
 use aya_ebpf_macros::uprobe;
 
 use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, Unreachable};
-use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
+use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, PassId, EXECUTABLE_LEN};
 
+use crate::statistics::update_tracking;
 use crate::{emit_report, IGNORED_PIDS};
 
 #[uprobe]
@@ -20,6 +21,7 @@ fn uprobe_memcpy(probe: ProbeContext) -> u32 {
 #[inline(always)]
 unsafe fn try_uprobe_memcpy(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
+    update_tracking(pid_tgid, PassId::uprobe_memcpy);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(0);

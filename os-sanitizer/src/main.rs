@@ -33,7 +33,7 @@ use tokio::{signal, task};
 use users::{get_group_by_gid, get_user_by_uid};
 
 use os_sanitizer_common::{
-    CopyViolation, FixedMmapViolation, OpenViolation, OsSanitizerReport, SnprintfViolation,
+    CopyViolation, FixedMmapViolation, OpenViolation, OsSanitizerReport, PassId, SnprintfViolation,
     SERIALIZED_SIZE,
 };
 
@@ -408,6 +408,28 @@ async fn main() -> Result<(), anyhow::Error> {
                                     };
                                     (executable.to_string(), (pid_tgid >> 32) as u32, pid_tgid as u32, stacktrace)
                                 },
+                                OsSanitizerReport::Statistics { executable, pid_tgid, stats } => {
+                                    let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
+                                        warn!("Couldn't recover the name of an executable.");
+                                        return;
+                                    };
+
+                                    let pid = (pid_tgid >> 32) as u32;
+                                    let thread = pid_tgid as u32;
+
+                                    let context = if pid == thread {
+                                        format!("{executable} (pid: {pid})")
+                                    } else {
+                                        format!("{executable} (pid: {pid}, thread: {thread})")
+                                    };
+
+                                    let entries = stats.into_iter().enumerate().filter(|&(_, e)| e != 0).map(|(id, e)| (PassId::from_repr(id).expect("invalid pass id"), e))
+                                        .map(|(id, e)| format!("\n  {id:?} observed {e} times")).collect::<Vec<_>>().join("");
+
+                                    debug!("{context} terminated with the following statistics:{entries}");
+
+                                    return;
+                                }
                             };
                             let procmap = {
                                 if let Ok(procmap) = ProcMap::new(pid as pid_t).map(Arc::new) {
@@ -682,6 +704,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
                                     (format!("{context} (originally pid: {orig_pid}), {msg}, exec'd after chdir following fork, which may constitute a leaky vessel vulnerability"), level)
                                 }
+                                OsSanitizerReport::Statistics { .. } => unreachable!("Handled in an earlier branch.")
                             };
 
                             // only error condition is if rx is closed
@@ -1042,6 +1065,8 @@ async fn main() -> Result<(), anyhow::Error> {
         attach_lsm!(bpf, btf, "task_fix_setuid", "setuid_lv");
         attach_tracepoint!(bpf, "fork_lv", ["sched", "sched_process_fork"]);
     }
+
+    attach_tracepoint!(bpf, "sched_exit_stats", ["sched", "sched_process_exit"]);
 
     signal::ctrl_c().await?;
 

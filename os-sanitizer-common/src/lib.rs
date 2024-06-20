@@ -1,9 +1,11 @@
+#![feature(variant_count)]
 #![cfg_attr(not(feature = "user"), no_std)]
 
 use core::ffi::c_long;
 #[cfg(feature = "user")]
 use core::mem::size_of;
 use core::mem::size_of_val;
+use core::mem::variant_count;
 
 pub const EXECUTABLE_LEN: usize = 16;
 pub const USERSTR_LEN: usize = 1024;
@@ -14,6 +16,54 @@ pub const SERIALIZED_SIZE: usize = 1 << 12;
 pub type MaybeOwnedArray<T, const N: usize> = &'static [T; N];
 #[cfg(feature = "user")]
 pub type MaybeOwnedArray<T, const N: usize> = [T; N];
+
+#[allow(non_camel_case_types)]
+#[repr(usize)]
+#[derive(Debug)]
+#[cfg_attr(feature = "user", derive(strum_macros::FromRepr))]
+pub enum PassId {
+    fentry_do_faccessat = 0,
+    fentry_do_statx,
+    uprobe_fclose_unlocked,
+    check_filep_usage,
+    uprobe_fixed_mmap_safe_function,
+    uretprobe_fixed_mmap_safe_function,
+    fentry_fixed_mmap,
+    tracepoint_execveat_lv,
+    fentry_set_fs_pwd_lv,
+    lsm_setuid_lv,
+    tracepoint_fork_lv,
+    uprobe_memcpy,
+    lsm_open_permissions_inode,
+    fentry_do_filp_open,
+    fentry_may_open,
+    fentry_open_permissions_file,
+    fentry_clear_open_permissions,
+    check_printf_mutability,
+    fentry_vma_set_page_prot,
+    fentry_security_file_open,
+    uprobe_snprintf_safe_wrapper,
+    uretprobe_snprintf_safe_wrapper,
+    uprobe_snprintf,
+    uretprobe_snprintf,
+    fentry_vfs_write_snprintf,
+    uprobe_xsputn_sprintf,
+    uprobe_sprintf_safe_wrapper,
+    uretprobe_sprintf_safe_wrapper,
+    uprobe_sprintf,
+    uprobe_strcpy_safe_wrapper,
+    uretprobe_strcpy_safe_wrapper,
+    uprobe_strcpy,
+    uprobe_strlen,
+    uretprobe_strlen,
+    uprobe_strncpy_safe_wrapper,
+    uretprobe_strncpy_safe_wrapper,
+    uprobe_strncpy,
+    fentry_do_sys_openat2,
+    check_system_absolute,
+    check_system_mutability,
+    fentry_vfs_fstatat,
+}
 
 #[repr(u32)]
 pub enum OsSanitizerError {
@@ -218,6 +268,11 @@ pub enum OsSanitizerReport {
         chdir_stack: u64,
         setuid_stack: u64,
     },
+    Statistics {
+        executable: [u8; EXECUTABLE_LEN],
+        pid_tgid: u64,
+        stats: MaybeOwnedArray<u64, { variant_count::<PassId>() }>,
+    },
 }
 
 trait SerialisedContent {
@@ -290,6 +345,7 @@ impl OsSanitizerReport {
             OsSanitizerReport::FixedMmap { .. } => 13,
             OsSanitizerReport::UnsafeOpen { .. } => 14,
             OsSanitizerReport::LeakyVessel { .. } => 15,
+            OsSanitizerReport::Statistics { .. } => 16,
         }])?;
         let buf = match self {
             OsSanitizerReport::RwxVma {
@@ -388,6 +444,11 @@ impl OsSanitizerReport {
                 .write(executable)?
                 .write(&pid_tgid.to_be_bytes())?
                 .write(&stack_id.to_be_bytes())?,
+            OsSanitizerReport::Statistics {
+                executable,
+                pid_tgid,
+                ..
+            } => buf.write(executable)?.write(&pid_tgid.to_be_bytes())?,
         };
         match self {
             OsSanitizerReport::RwxVma { start, end, .. } => {
@@ -550,6 +611,12 @@ impl OsSanitizerReport {
                     .write(&chdir_stack.to_be_bytes())?
                     .write(&setuid_stack.to_be_bytes())?;
             }
+            OsSanitizerReport::Statistics { stats, .. } => {
+                let mut buf = buf;
+                for stat in stats.iter() {
+                    buf = buf.write(&stat.to_be_bytes())?;
+                }
+            }
         }
         Ok(())
     }
@@ -565,10 +632,11 @@ impl TryFrom<&[u8]> for OsSanitizerReport {
         let mut executable = [0u8; EXECUTABLE_LEN];
         let mut pid_tgid = 0;
         let mut stack_id = 0;
-        let value = value
-            .read(&mut executable)?
-            .read_u64(&mut pid_tgid)?
-            .read_u64(&mut stack_id)?;
+        let mut value = value.read(&mut executable)?.read_u64(&mut pid_tgid)?;
+        if discriminant != 16 {
+            // statistics does not have a stack id
+            value = value.read_u64(&mut stack_id)?;
+        }
         Ok(match discriminant {
             0u8 => {
                 let mut start = 0;
@@ -852,6 +920,18 @@ impl TryFrom<&[u8]> for OsSanitizerReport {
                     orig_uid,
                     chdir_stack,
                     setuid_stack,
+                }
+            }
+            16 => {
+                let mut stats = [0u64; variant_count::<PassId>()];
+                for stat in stats.iter_mut() {
+                    value = value.read_u64(stat)?;
+                }
+
+                OsSanitizerReport::Statistics {
+                    executable,
+                    pid_tgid,
+                    stats,
                 }
             }
             _ => {

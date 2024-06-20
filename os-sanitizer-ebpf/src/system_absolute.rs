@@ -6,13 +6,15 @@ use aya_ebpf::programs::ProbeContext;
 use aya_ebpf_macros::uprobe;
 
 use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, Unreachable};
-use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
+use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, PassId, EXECUTABLE_LEN};
 
+use crate::statistics::update_tracking;
 use crate::{emit_report, read_str, IGNORED_PIDS};
 
 #[inline(always)]
 unsafe fn check_system_absolute(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
+    update_tracking(pid_tgid, PassId::check_system_absolute);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(0);

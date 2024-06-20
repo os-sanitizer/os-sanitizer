@@ -40,6 +40,9 @@ pub struct Options {
     /// Whether to use backwards-compatible versions of bindings (use if it doesn't build the first time)
     #[clap(long)]
     pub compat: bool,
+    /// Whether to issue tracking statistics when programs terminate
+    #[clap(long)]
+    pub tracking: bool,
 }
 
 pub fn build_ebpf(opts: Options) -> Result<(), anyhow::Error> {
@@ -53,9 +56,17 @@ pub fn build_ebpf(opts: Options) -> Result<(), anyhow::Error> {
         "build-std=core",
     ];
     args.push("--release");
+    let mut features = Vec::new();
     if !opts.compat {
+        features.push("anon-struct");
+    }
+    if opts.tracking {
+        features.push("tracking");
+    }
+    let features = features.join(",");
+    if !features.is_empty() {
         args.push("--features");
-        args.push("anon-struct");
+        args.push(&features);
     }
 
     // Command::new creates a child process which inherits all env variables. This means env

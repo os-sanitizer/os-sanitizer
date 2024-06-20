@@ -5,12 +5,12 @@ edition = "2021"
 
 [features]
 default = []
-user = ["aya"]
+user = ["aya", "strum_macros"]
 
 [dependencies]
 aya = { git = "https://github.com/aya-rs/aya.git", optional = true }
 aya-ebpf-cty = { git = "https://github.com/aya-rs/aya.git" }
-enum-iterator = "1.4.1"
+strum_macros = { version = "0.26.4", optional = true }
 
 [lib]
 path = "src/lib.rs"

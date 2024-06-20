@@ -8,9 +8,10 @@ use aya_ebpf_macros::fentry;
 
 use os_sanitizer_common::OpenViolation::{Perms, Toctou};
 use os_sanitizer_common::OsSanitizerError::{CouldntAccessBuffer, CouldntGetComm, CouldntGetPath};
-use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, EXECUTABLE_LEN};
+use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, PassId, EXECUTABLE_LEN};
 
 use crate::binding::file;
+use crate::statistics::update_tracking;
 use crate::{emit_report, FLAGGED_FILE_OPEN_PIDS, IGNORED_PIDS, STRING_SCRATCH};
 
 #[fentry(function = "security_file_open")]
@@ -24,6 +25,8 @@ fn fentry_security_file_open(probe: FEntryContext) -> u32 {
 #[inline(always)]
 unsafe fn try_fentry_security_file_open(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
+    update_tracking(pid_tgid, PassId::fentry_security_file_open);
+
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(0);
     }

@@ -6,11 +6,12 @@ use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::programs::FEntryContext;
 use aya_ebpf_macros::fentry;
 
-use os_sanitizer_common::OsSanitizerError;
 use os_sanitizer_common::OsSanitizerError::Unreachable;
 use os_sanitizer_common::ToctouVariant::Statx;
+use os_sanitizer_common::{OsSanitizerError, PassId};
 
 use crate::binding::filename;
+use crate::statistics::update_tracking;
 use crate::{read_str, ACCESS_MAP};
 
 #[fentry(function = "do_statx")]
@@ -24,6 +25,8 @@ fn fentry_do_statx(probe: FEntryContext) -> u32 {
 #[inline(always)]
 unsafe fn try_fentry_do_statx(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
+    update_tracking(pid_tgid, PassId::fentry_do_statx);
+
     let dfd: c_int = ctx.arg(0);
 
     let filename_ptr: *const filename = ctx.arg(1);

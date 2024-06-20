@@ -1,3 +1,4 @@
+#![feature(variant_count)]
 #![no_std]
 #![no_main]
 
@@ -44,6 +45,7 @@ mod rwx_mem;
 mod security_file_open;
 mod snprintf;
 mod sprintf;
+pub(crate) mod statistics;
 mod strcpy;
 mod strlen;
 mod strncpy;

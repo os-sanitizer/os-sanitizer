@@ -5,6 +5,7 @@ edition = "2021"
 
 [features]
 anon-struct = []
+tracking = []
 
 [dependencies]
 aya-ebpf = { git = "https://github.com/aya-rs/aya.git" }
