@@ -4,7 +4,6 @@ Code snippets to highlight reporting by different os-sanitizer passes. In additi
 ## Prerequisites
 1. Make sure `dir1` is writeable by other users. Do it with: `chmod o+w dir1`.
 2. Make sure `05_demo_file.txt` is writeable by other users. Do it with `chmod 666 05_demo_file.txt`.
-3. `02_gets_input_file.txt` should have enough lines to supply `02_gets.c` when it is configured to run mutltiple times. Runs are specified by `common.h`.
 
 ## Usage
 1. Build examples with `make all`. To build example that run multiple times use `make all OPTION='-DMICROBENCHMARK'`.
