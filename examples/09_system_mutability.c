@@ -7,18 +7,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "common.h"
 
 int main ()
 {
     char s[5];
     strcpy(s, "ls");
+
+    MICROBENCHMARK_LOOP_START
+
     int ret = system(s);
     if (ret == 0) {
-        printf("Success.\n");
+        debug_printf("Success.\n");
     } else {
-        printf("Error: Can not execute command. Errno: %d\n", errno);
+        debug_printf("Error: Can not execute command. Errno: %d\n", errno);
         return -1;
     }
+
+    MICROBENCHMARK_LOOP_END
 
     return 0;
 }

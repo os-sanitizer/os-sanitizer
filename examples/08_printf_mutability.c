@@ -4,12 +4,17 @@
 // 1. use format string that lies in writable memory
 
 #include <stdio.h>
-#include <string.h>
+
+#include "common.h"
 
 int main (int argc, char **argv)
 {
+    MICROBENCHMARK_LOOP_START
+
     printf(argv[0]);
-    printf("Success.\n");
+    debug_printf("Success.\n");
+
+    MICROBENCHMARK_LOOP_END
 
     return 0;
 }

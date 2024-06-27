@@ -7,21 +7,26 @@
 // 1. gets
 
 #include <stdio.h>
+#include "common.h"
 
 // forward declare -- this is not provided in stdio and causes a compiler error
 extern char *gets(char *s);
 
 int main ()
 {
-    printf("Let's try gets.\n");
+    debug_printf("Let's try gets.\n");
     char string[10];
-    printf("Type something and press enter.\n");
+
+    MICROBENCHMARK_LOOP_START
+
+    debug_printf("Type something and press enter.\n");
     // works fine with input: aaaaa
     // stack smashing with: aaaaaaaaaaaaaaaaaaaaaaaaaaaa
     gets(string);
-    printf("You entered: %s\n",string);
+    debug_printf("You entered: %s\n",string);
+    debug_printf("Success.\n");
 
-    printf("Success.\n");
+    MICROBENCHMARK_LOOP_END
 
     return 0;
 }

@@ -11,32 +11,34 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
+#include "common.h"
 
 int main ()
 {
+    int fd;
+    const char *open_filename = "sensitive_information.txt";
     long pagesize = sysconf(_SC_PAGE_SIZE);
-    printf("Page Size: %ld\n", pagesize);
+    debug_printf("Page Size: %ld\n", pagesize);
 
     // Fedora didn't like mprotect PROT_EXEC on posix_memalign (ed) location. Ubuntu was fine.
     // https://stackoverflow.com/questions/48106059/calling-mprotect-on-dynamically-allocated-memory-results-in-error-with-error-cod#comment83221695_48106059
 
-    int fd;
-    const char *open_filename = "sensitive_information.txt";
+    MICROBENCHMARK_LOOP_START
+
     fd = open(open_filename, O_RDONLY);
     int *addr = mmap(NULL, pagesize , PROT_READ , MAP_PRIVATE, fd, 0);
-    printf("Pointer to mmap(ped) area : %p\n", addr);
-
+    debug_printf("Pointer to mmap(ped) area : %p\n", addr);
     int ret = mprotect(addr, pagesize, PROT_WRITE | PROT_EXEC);
     if (ret == -1) {
-        printf("Error. Errno: %d\n", errno);
+        debug_printf("Error. Errno: %d\n", errno);
     } else {
-        printf("mmap(ped) memory set to write + execute.\n");
+        debug_printf("mmap(ped) memory set to write + execute.\n");
     }
-
     munmap(addr, pagesize);
     close(fd);
+    debug_printf("Success.\n");
 
-    printf("Success.\n");
+    MICROBENCHMARK_LOOP_END
 
     return 0;
 }

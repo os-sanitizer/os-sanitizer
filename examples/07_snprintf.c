@@ -6,20 +6,26 @@
 
 #include <stdio.h>
 #include <unistd.h>
+#include "common.h"
 
 int main ()
 {
     char str_buf[16] = "0123456789abcdef";
     char *s = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     // WTF! why does snprintf returns "characters that would have been written if n had been sufficiently large"
+
+    MICROBENCHMARK_LOOP_START
+
     int snprintf_result = snprintf(str_buf, 16, "%s", s);
-    printf("snprintf return value: %d\n", snprintf_result);
-    printf("Bytes actually written by snprintf: %d\n", 16);
-    printf("Writing str_buf to STDOUT with snprintf return value.\n");
+    debug_printf("snprintf return value: %d\n", snprintf_result);
+    debug_printf("Bytes actually written by snprintf: %d\n", 16);
+    debug_printf("Writing str_buf to STDOUT with snprintf return value.\n");
     ssize_t bytes_written = write(STDOUT_FILENO, str_buf, snprintf_result);
-    printf("\n");
-    printf("Bytes written by write %ld\n", bytes_written);
-    printf("Success.\n");
+    debug_printf("\n");
+    debug_printf("Bytes written by write %ld\n", bytes_written);
+    debug_printf("Success.\n");
+
+    MICROBENCHMARK_LOOP_END
 
     return 0;
 }

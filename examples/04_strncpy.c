@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "common.h"
 
 int main ()
 {
@@ -12,9 +13,13 @@ int main ()
     // char *s = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     char *s = "aaaaaaa";
     char d[8];
-    strncpy(d, s, strlen(s));
 
-    printf("Success.\n");
+    MICROBENCHMARK_LOOP_START
+
+    strncpy(d, s, strlen(s));
+    debug_printf("Success.\n");
+
+    MICROBENCHMARK_LOOP_END
 
     return 0;
 }

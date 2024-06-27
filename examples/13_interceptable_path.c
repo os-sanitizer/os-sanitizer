@@ -8,24 +8,28 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include "common.h"
 
 int main ()
 {
     // first do $ chmod o+w dir1
-    printf("Please do `$ chmod o+w dir1` first.\n");
-
-    printf("Now let's open dir1/dir2/sensitive_information.txt\n");
+    debug_printf("Please do `$ chmod o+w dir1` first.\n");
+    debug_printf("Now let's open dir1/dir2/sensitive_information.txt\n");
     const char *open_filename = "dir1/dir2/sensitive_information.txt";
+
+    MICROBENCHMARK_LOOP_START
+
     int fd = open(open_filename, O_RDONLY);
     if (fd == -1) {
-        printf("Error: Can not open file. Errno: %d\n", errno);
+        debug_printf("Error: Can not open file. Errno: %d\n", errno);
         return -1;
     } else {
-        printf("fd for reading file: %d\n", fd);
+        debug_printf("fd for reading file: %d\n", fd);
     }
     close(fd);
+    debug_printf("Success.\n");
 
-    printf("Success.\n");
+    MICROBENCHMARK_LOOP_END
 
     return 0;
 }
