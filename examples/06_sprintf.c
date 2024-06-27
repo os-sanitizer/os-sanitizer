@@ -10,7 +10,7 @@
 int main ()
 {
     char buffer [16];
-    char *s = "aaaaaaaaaaaaaaa";
+    char *s = "aaaaaaaaaa";
 
     MICROBENCHMARK_LOOP_START
 
