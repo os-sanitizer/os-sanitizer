@@ -346,6 +346,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let mut reports =
         AsyncPerfEventArray::try_from(bpf.take_map("FUNCTION_REPORT_QUEUE").unwrap())?;
+    let mut stats = AsyncPerfEventArray::try_from(bpf.take_map("STATS_QUEUE").unwrap())?;
 
     let stacktraces = Arc::new(StackTraceMap::try_from(
         bpf.take_map("STACKTRACES").unwrap(),
@@ -359,413 +360,415 @@ async fn main() -> Result<(), anyhow::Error> {
     ));
 
     for cpu_id in online_cpus()? {
-        let mut buf = reports.open(cpu_id, None)?;
-        {
-            let stacktraces = stacktraces.clone();
-            let cached_procmaps = cached_procmaps.clone();
-            let keep_going = keep_going.clone();
-            tasks.push(task::spawn(async move {
-                let mut buffers = (0..32)
-                    .map(|_| BytesMut::with_capacity(SERIALIZED_SIZE))
-                    .collect::<Vec<_>>();
+        for source in [&mut reports, &mut stats] {
+            let mut buf = source.open(cpu_id, None)?;
+            {
+                let stacktraces = stacktraces.clone();
+                let cached_procmaps = cached_procmaps.clone();
+                let keep_going = keep_going.clone();
+                tasks.push(task::spawn(async move {
+                    let mut buffers = (0..32)
+                        .map(|_| BytesMut::with_capacity(SERIALIZED_SIZE))
+                        .collect::<Vec<_>>();
 
-                while keep_going.load(Ordering::Relaxed) {
-                    let events = buf.read_events(&mut buffers).await.unwrap();
-                    for buf in buffers.iter_mut().take(events.read) {
-                        let report = buf.iter().as_slice();
-                        let Ok(report) = OsSanitizerReport::try_from(report) else {
-                            warn!("Failed to deserialise a report.");
-                            continue;
-                        };
-                        let stacktraces = stacktraces.clone();
-                        let cached_procmaps = cached_procmaps.clone();
-                        task::spawn(async move {
-                            let (executable, pid, thread, stacktrace) = match report {
-                                OsSanitizerReport::PrintfMutability { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::SystemMutability { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::SystemAbsolute { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::FilePointerLocking { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::Snprintf { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::Sprintf { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::Strcpy { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::Strncpy { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::Memcpy { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::Open { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::UnsafeOpen { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::Access { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::Gets { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::RwxVma { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::FixedMmap { executable, pid_tgid, stack_id, .. }
-                                | OsSanitizerReport::LeakyVessel { executable, pid_tgid, stack_id, .. }
-                                => {
-                                    let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
-                                        warn!("Couldn't recover the name of an executable.");
-                                        return;
-                                    };
-                                    let Ok(stacktrace) = stacktraces.get(&(stack_id as u32), 0) else {
-                                        warn!("Couldn't recover the stacktrace of the executable {executable}.");
-                                        return;
-                                    };
-                                    (executable.to_string(), (pid_tgid >> 32) as u32, pid_tgid as u32, stacktrace)
-                                },
-                                OsSanitizerReport::Statistics { executable, pid_tgid, stats } => {
-                                    let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
-                                        warn!("Couldn't recover the name of an executable.");
-                                        return;
-                                    };
-
-                                    let pid = (pid_tgid >> 32) as u32;
-                                    let thread = pid_tgid as u32;
-
-                                    let context = if pid == thread {
-                                        format!("{executable} (pid: {pid})")
-                                    } else {
-                                        format!("{executable} (pid: {pid}, thread: {thread})")
-                                    };
-
-                                    let entries = stats.into_iter().enumerate().filter(|&(_, e)| e != 0).map(|(id, e)| (PassId::from_repr(id).expect("invalid pass id"), e))
-                                        .map(|(id, e)| format!("\n  {id:?} observed {e} times")).collect::<Vec<_>>().join("");
-
-                                    debug!("{context} terminated with the following statistics:{entries}");
-
-                                    return;
-                                }
+                    while keep_going.load(Ordering::Relaxed) {
+                        let events = buf.read_events(&mut buffers).await.unwrap();
+                        for buf in buffers.iter_mut().take(events.read) {
+                            let report = buf.iter().as_slice();
+                            let Ok(report) = OsSanitizerReport::try_from(report) else {
+                                warn!("Failed to deserialise a report.");
+                                continue;
                             };
-                            let procmap = {
-                                if let Ok(procmap) = ProcMap::new(pid as pid_t).map(Arc::new) {
-                                    // update!
-                                    let mut lock = cached_procmaps.lock().await;
-                                    let handle = {
-                                        let cached_procmaps = cached_procmaps.clone();
-                                        tokio::spawn(async move {
-                                            sleep(Duration::from_secs(PROCMAP_CACHE_TIME)).await;
-                                            let mut lock = cached_procmaps.lock().await;
-                                            let _ = lock.remove(&pid);
-                                        })
-                                    };
-                                    if let Some((_, old)) = lock.insert(pid, (procmap.clone(), handle)) {
-                                        old.abort();
-                                    }
-                                    Some(procmap)
-                                } else {
-                                    // use the last available
-                                    let lock = cached_procmaps.lock().await;
-                                    lock.get(&pid).map(|(existing, _)| existing.clone())
-                                }
-                            };
-
-                            // not actually allocated unless we give an element
-                            let mut extra_stacktraces = Vec::new();
-
-                            let context = if pid == thread {
-                                format!("{executable} (pid: {pid})")
-                            } else {
-                                format!("{executable} (pid: {pid}, thread: {thread})")
-                            };
-
-                            let (message, level) = match report {
-                                OsSanitizerReport::PrintfMutability { template_param, template, .. } => {
-                                    if let Ok(template) = unsafe {
-                                        CStr::from_ptr(template.as_ptr() as *const c_char).to_str()
-                                    } {
-                                        let template = template.trim();
-                                        // there seems to be a common (but annoying) pattern where vsnprintf is cut up and
-                                        // called with individual format arguments
-                                        // we skip the report if it looks like this is a standalone printf arg or not utf8
-
-                                        // this is not done in ebpf because it causes some weird verifier issue
-
-                                        // reeeeally basic printf specifier check
-                                        if template.starts_with('%')
-                                            && template
-                                            .chars()
-                                            .all(|c| "ldiuoxXfFeEgGaAcspn%#.*0123456789-".contains(c))
-                                        {
+                            let stacktraces = stacktraces.clone();
+                            let cached_procmaps = cached_procmaps.clone();
+                            task::spawn(async move {
+                                let (executable, pid, thread, stacktrace) = match report {
+                                    OsSanitizerReport::PrintfMutability { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::SystemMutability { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::SystemAbsolute { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::FilePointerLocking { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::Snprintf { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::Sprintf { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::Strcpy { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::Strncpy { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::Memcpy { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::Open { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::UnsafeOpen { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::Access { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::Gets { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::RwxVma { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::FixedMmap { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::LeakyVessel { executable, pid_tgid, stack_id, .. }
+                                    => {
+                                        let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
+                                            warn!("Couldn't recover the name of an executable.");
                                             return;
-                                        }
-                                        (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}: {template}"), Level::Warn)
-                                    } else {
-                                        (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}, but the template was not string-like"), Level::Warn)
-                                    }
-                                }
-                                OsSanitizerReport::SystemMutability { command_param, command, .. } => {
-                                    if let Ok(command) = unsafe {
-                                        CStr::from_ptr(command.as_ptr() as *const c_char).to_str()
-                                    } {
-                                        (format!("{context} invoked system with a non-constant command string located at 0x{command_param:x}: {command}"), Level::Warn)
-                                    } else {
-                                        (format!("{context} invoked system with a non-constant command string located at 0x{command_param:x}, but the command was not string-like"), Level::Warn)
-                                    }
-                                }
-                                OsSanitizerReport::SystemAbsolute { command_param, command, .. } => {
-                                    if let Ok(command) = unsafe {
-                                        CStr::from_ptr(command.as_ptr() as *const c_char).to_str()
-                                    } {
-                                        (format!("{context} invoked system with a non-absolute command string located at 0x{command_param:x}: {command}"), Level::Warn)
-                                    } else {
-                                        (format!("{context} invoked system with a non-absolute command string located at 0x{command_param:x}, but the command was not string-like"), Level::Warn)
-                                    }
-                                }
-                                OsSanitizerReport::FilePointerLocking { .. } => {
-                                    (format!("{context} invoked a FILE* function with unlocked in another thread from a usage of another FILE* function"), Level::Warn)
-                                }
-                                OsSanitizerReport::Snprintf { srcptr, size, computed, count, kind, second_stack_id, .. } => {
-                                    let warning_string = if kind == SnprintfViolation::DefiniteLeak {
-                                        "which exceeded the originally specified length"
-                                    } else {
-                                        "which might leak"
-                                    };
-                                    let Ok(stacktrace) = stacktraces.get(&(second_stack_id as u32), 0) else {
-                                        warn!("Couldn't recover the stacktrace of the executable {executable}.");
+                                        };
+                                        let Ok(stacktrace) = stacktraces.get(&(stack_id as u32), 0) else {
+                                            warn!("Couldn't recover the stacktrace of the executable {executable}.");
+                                            return;
+                                        };
+                                        (executable.to_string(), (pid_tgid >> 32) as u32, pid_tgid as u32, stacktrace)
+                                    },
+                                    OsSanitizerReport::Statistics { executable, pid_tgid, stats } => {
+                                        let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
+                                            warn!("Couldn't recover the name of an executable.");
+                                            return;
+                                        };
+
+                                        let pid = (pid_tgid >> 32) as u32;
+                                        let thread = pid_tgid as u32;
+
+                                        let context = if pid == thread {
+                                            format!("{executable} (pid: {pid})")
+                                        } else {
+                                            format!("{executable} (pid: {pid}, thread: {thread})")
+                                        };
+
+                                        let entries = stats.into_iter().enumerate().filter(|&(_, e)| e != 0).map(|(id, e)| (PassId::from_repr(id).expect("invalid pass id"), e))
+                                            .map(|(id, e)| format!("\n  {id:?} observed {e} times")).collect::<Vec<_>>().join("");
+
+                                        debug!("{context} terminated with the following statistics:{entries}");
+
                                         return;
-                                    };
-                                    extra_stacktraces.push(stacktrace);
-                                    (format!("{context} invoked a write syscall of an snprintf-constructed string ({srcptr:#x}) using the computed length from snprintf, {warning_string} (wrote {count}, computed {computed}, restricted size {size})"), Level::Warn)
-                                }
-                                OsSanitizerReport::Sprintf { dest, .. } => {
-                                    (format!("{context} invoked sprintf with stack dest pointer (dest: 0x{dest:x})"), Level::Warn)
-                                }
-                                OsSanitizerReport::Strcpy { len_checked: true, dest, src, .. } => {
-                                    (format!("{context} invoked strcpy with stack dest pointer with a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Info)
-                                }
-                                OsSanitizerReport::Strcpy { len_checked: false, dest, src, .. } => {
-                                    (format!("{context} invoked strcpy with stack dest pointer without a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Warn)
-                                }
-                                OsSanitizerReport::Strncpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
-                                    (format!("{context} invoked strncpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info)
-                                }
-                                OsSanitizerReport::Strncpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
-                                    (format!("{context} invoked strncpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn)
-                                }
-                                OsSanitizerReport::Memcpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
-                                    (format!("{context} invoked memcpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info)
-                                }
-                                OsSanitizerReport::Memcpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
-                                    (format!("{context} invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn)
-                                }
-                                OsSanitizerReport::Open { i_mode, filename, variant, .. } => {
-                                    let Ok(filename) = (unsafe {
-                                        CStr::from_ptr(filename.as_ptr() as *const c_char).to_str()
-                                    }) else {
-                                        return;
-                                    };
-
-                                    let filetype = i_mode >> 12;
-                                    let filetype = match filetype {
-                                        0x1 => "fifo",
-                                        0x2 => "chardev",
-                                        0x4 => "directory",
-                                        0x6 => "blockdev",
-                                        0x8 => "file",
-                                        0xA => "symlink",
-                                        0xC => "socket",
-                                        _ => unreachable!(),
-                                    };
-
-                                    match variant {
-                                        OpenViolation::Perms => {
-                                            let mut rendered = [0; 9];
-                                            for (i, e) in rendered.iter_mut().enumerate() {
-                                                let b = if i_mode & (0b1 << (9 - i - 1)) != 0 {
-                                                    match i % 3 {
-                                                        0 => b'r',
-                                                        1 => b'w',
-                                                        2 => b'x',
-                                                        _ => unreachable!(),
-                                                    }
-                                                } else {
-                                                    b'-'
-                                                };
-                                                *e = b;
-                                            }
-                                            let rendered = core::str::from_utf8(&rendered).unwrap();
-
-                                            if i_mode & 0xF000 == 0x8000 || i_mode & 0xF000 == 0x4000 {
-                                                let level = if Command::new("ls")
-                                                    .arg(filename)
-                                                    .uid(0x1337).gid(0x1337)
-                                                    .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
-                                                    .status().await
-                                                    .map_or(false, |v| v.success()) {
-                                                    Level::Error
-                                                } else {
-                                                    Level::Warn
-                                                };
-                                                (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), level)
-                                            } else {
-                                                (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), Level::Info)
-                                            }
+                                    }
+                                };
+                                let procmap = {
+                                    if let Ok(procmap) = ProcMap::new(pid as pid_t).map(Arc::new) {
+                                        // update!
+                                        let mut lock = cached_procmaps.lock().await;
+                                        let handle = {
+                                            let cached_procmaps = cached_procmaps.clone();
+                                            tokio::spawn(async move {
+                                                sleep(Duration::from_secs(PROCMAP_CACHE_TIME)).await;
+                                                let mut lock = cached_procmaps.lock().await;
+                                                let _ = lock.remove(&pid);
+                                            })
+                                        };
+                                        if let Some((_, old)) = lock.insert(pid, (procmap.clone(), handle)) {
+                                            old.abort();
                                         }
-                                        OpenViolation::Toctou(variant, second_stack_id) => {
-                                            let Ok(stacktrace) = stacktraces.get(&(second_stack_id as u32), 0) else {
-                                                warn!("Couldn't recover the stacktrace of the executable {executable}.");
+                                        Some(procmap)
+                                    } else {
+                                        // use the last available
+                                        let lock = cached_procmaps.lock().await;
+                                        lock.get(&pid).map(|(existing, _)| existing.clone())
+                                    }
+                                };
+
+                                // not actually allocated unless we give an element
+                                let mut extra_stacktraces = Vec::new();
+
+                                let context = if pid == thread {
+                                    format!("{executable} (pid: {pid})")
+                                } else {
+                                    format!("{executable} (pid: {pid}, thread: {thread})")
+                                };
+
+                                let (message, level) = match report {
+                                    OsSanitizerReport::PrintfMutability { template_param, template, .. } => {
+                                        if let Ok(template) = unsafe {
+                                            CStr::from_ptr(template.as_ptr() as *const c_char).to_str()
+                                        } {
+                                            let template = template.trim();
+                                            // there seems to be a common (but annoying) pattern where vsnprintf is cut up and
+                                            // called with individual format arguments
+                                            // we skip the report if it looks like this is a standalone printf arg or not utf8
+
+                                            // this is not done in ebpf because it causes some weird verifier issue
+
+                                            // reeeeally basic printf specifier check
+                                            if template.starts_with('%')
+                                                && template
+                                                .chars()
+                                                .all(|c| "ldiuoxXfFeEgGaAcspn%#.*0123456789-".contains(c))
+                                            {
                                                 return;
-                                            };
-                                            extra_stacktraces.push(stacktrace);
-                                            (format!("{context} opened `{filename}' (a {filetype}) after accessing it via {variant}, a known TOCTOU pattern"), Level::Info)
-                                        }
-                                    }
-                                }
-                                OsSanitizerReport::UnsafeOpen {
-                                    original, filename, uid, gid, uids, gids, mask, everyone, ..
-                                } => {
-                                    let Ok(filename) = CStr::from_bytes_until_nul(filename.as_slice()).map(|s| s.to_string_lossy()) else {
-                                        return;
-                                    };
-                                    let Ok(original) = (if let Some(original) = &original {
-                                        CStr::from_bytes_until_nul(original.as_slice()).map(|s| s.to_string_lossy())
-                                    } else {
-                                        Ok(Cow::from("<unrecoverable>"))
-                                    }) else {
-                                        return;
-                                    };
-                                    let uids = uids.into_iter().take_while(|i| *i != 0).map(|uid| get_user_by_uid(uid).map_or_else(|| uid.to_string(), |user| {
-                                        user.name().to_string_lossy().to_string()
-                                    })).collect::<Vec<_>>().join(",");
-                                    let gids = gids.into_iter().take_while(|i| *i != 0).map(|gid| get_group_by_gid(gid).map_or_else(|| gid.to_string(), |group| {
-                                        group.name().to_string_lossy().to_string()
-                                    })).collect::<Vec<_>>().join(",");
-                                    let level = if mask & 0x1 != 0 {
-                                        Level::Error
-                                    } else if uid == 0 || gid == 0 {
-                                        Level::Warn
-                                    } else {
-                                        Level::Info
-                                    };
-                                    let uid = get_user_by_uid(uid).map_or_else(|| uid.to_string(), |user| {
-                                        user.name().to_string_lossy().to_string()
-                                    });
-                                    let gid = get_group_by_gid(gid).map_or_else(|| gid.to_string(), |group| {
-                                        group.name().to_string_lossy().to_string()
-                                    });
-                                    let mut perms = Vec::new();
-                                    {
-                                        let mut i = 1;
-                                        static PERM_ITER: [&str; 8] = ["MAY_EXEC", "MAY_WRITE", "MAY_READ", "MAY_APPEND", "MAY_ACCESS", "MAY_OPEN", "MAY_CHDIR", "MAY_NOT_BLOCK"];
-                                        for perm in PERM_ITER {
-                                            if i & mask != 0 {
-                                                perms.push(perm);
                                             }
-                                            i <<= 1;
+                                            (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}: {template}"), Level::Warn)
+                                        } else {
+                                            (format!("{context} invoked a printf-like function with a non-constant template string located at 0x{template_param:x}, but the template was not string-like"), Level::Warn)
                                         }
                                     }
-                                    let and_everyone = if everyone {
-                                        ", as well as everyone else"
-                                    } else {
-                                        ""
-                                    };
-                                    (format!("{context}, acting as {uid}:{gid}, attempted to access {filename} (originally as {original}) with {perms:?} ({mask:#x}), which may be intercepted by uids [{uids}] and gids [{gids}]{and_everyone}"), level)
-                                }
-                                OsSanitizerReport::Access { .. } => {
-                                    (format!("{context} invoked access, which is a syscall wrapper explicitly warned against"), Level::Info)
-                                }
-                                OsSanitizerReport::Gets { .. } => {
-                                    (format!("{context} invoked gets, which is incredibly stupid"), Level::Error)
-                                }
-                                OsSanitizerReport::RwxVma { start, end, .. } => {
-                                    (format!("{context} updated a memory region at {start:#x}-{end:#x} to be simultaneously writable and executable"), Level::Warn)
-                                }
-                                OsSanitizerReport::FixedMmap { protection, variant, .. } => {
-                                    match variant {
-                                        FixedMmapViolation::HintUsed => {
-                                            if protection & PROT_EXEC as u64 != 0 {
-                                                (format!("{context} attempted to map an executable memory region at a fixed address"), Level::Warn)
-                                            } else {
-                                                (format!("{context} attempted to map an non-executable memory region at a fixed address"), Level::Info)
-                                            }
-                                        }
-                                        FixedMmapViolation::FixedMmapUnmapped => {
-                                            (format!("{context} mapped a memory region with MAP_FIXED without preallocating at the same region"), Level::Warn)
-                                        }
-                                        FixedMmapViolation::FixedMmapBadProt => {
-                                            (format!("{context} mapped a memory region with MAP_FIXED on a memory region which was allocated with non-zero protections"), Level::Info)
+                                    OsSanitizerReport::SystemMutability { command_param, command, .. } => {
+                                        if let Ok(command) = unsafe {
+                                            CStr::from_ptr(command.as_ptr() as *const c_char).to_str()
+                                        } {
+                                            (format!("{context} invoked system with a non-constant command string located at 0x{command_param:x}: {command}"), Level::Warn)
+                                        } else {
+                                            (format!("{context} invoked system with a non-constant command string located at 0x{command_param:x}, but the command was not string-like"), Level::Warn)
                                         }
                                     }
-                                }
-                                OsSanitizerReport::LeakyVessel { orig_pid, orig_uid, chdir_stack, setuid_stack, .. } => {
-                                    let (msg, level) = if setuid_stack != 0 {
-                                        let Ok(stacktrace) = stacktraces.get(&(setuid_stack as u32), 0) else {
+                                    OsSanitizerReport::SystemAbsolute { command_param, command, .. } => {
+                                        if let Ok(command) = unsafe {
+                                            CStr::from_ptr(command.as_ptr() as *const c_char).to_str()
+                                        } {
+                                            (format!("{context} invoked system with a non-absolute command string located at 0x{command_param:x}: {command}"), Level::Warn)
+                                        } else {
+                                            (format!("{context} invoked system with a non-absolute command string located at 0x{command_param:x}, but the command was not string-like"), Level::Warn)
+                                        }
+                                    }
+                                    OsSanitizerReport::FilePointerLocking { .. } => {
+                                        (format!("{context} invoked a FILE* function with unlocked in another thread from a usage of another FILE* function"), Level::Warn)
+                                    }
+                                    OsSanitizerReport::Snprintf { srcptr, size, computed, count, kind, second_stack_id, .. } => {
+                                        let warning_string = if kind == SnprintfViolation::DefiniteLeak {
+                                            "which exceeded the originally specified length"
+                                        } else {
+                                            "which might leak"
+                                        };
+                                        let Ok(stacktrace) = stacktraces.get(&(second_stack_id as u32), 0) else {
                                             warn!("Couldn't recover the stacktrace of the executable {executable}.");
                                             return;
                                         };
                                         extra_stacktraces.push(stacktrace);
-                                        ("running as root before performing setuid", Level::Error)
-                                    } else if orig_uid != 0 {
-                                        ("a low-privilege process", Level::Info)
-                                    } else {
-                                        ("running as root", Level::Warn)
-                                    };
-
-                                    let Ok(stacktrace) = stacktraces.get(&(chdir_stack as u32), 0) else {
-                                        warn!("Couldn't recover the stacktrace of the executable {executable}.");
-                                        return;
-                                    };
-                                    extra_stacktraces.push(stacktrace);
-
-                                    (format!("{context} (originally pid: {orig_pid}), {msg}, exec'd after chdir following fork, which may constitute a leaky vessel vulnerability"), level)
-                                }
-                                OsSanitizerReport::Statistics { .. } => unreachable!("Handled in an earlier branch.")
-                            };
-
-                            // only error condition is if rx is closed
-                            let maybe_resolver =
-                                procmap.as_ref().map(|procmap| ProcMapOffsetResolver::from(procmap.as_ref()));
-
-                            let frame_iter = if let Some(resolver) = maybe_resolver.as_ref() {
-                                Either::Left(stacktrace.frames().iter().enumerate().chain(extra_stacktraces.iter().flat_map(|s| s.frames().iter().enumerate())).flat_map(|(i, frame)| {
-                                    match i.cmp(&visibility_depth) {
-                                        core::cmp::Ordering::Less => {
-                                            let spacing = if i == 0 { "\n" } else { "" };
-                                            Some(Cow::from(resolver.resolve_file_offset(frame.ip).map_or_else(
-                                                || format!("{spacing}#{i} 0x{:x}", frame.ip),
-                                                move |(path, offset)| {
-                                                    if let Some(path) = path.to_str() {
-                                                        format!("{spacing}#{i} 0x{:x}  ({path}+0x{offset:x})", frame.ip)
-                                                    } else {
-                                                        format!(
-                                                            "{spacing}#{i} 0x{:x}  {}+0x{offset:x} (name adjusted for utf-8 compat)",
-                                                            frame.ip,
-                                                            path.to_string_lossy()
-                                                        )
-                                                    }
-                                                },
-                                            )))
-                                        }
-                                        core::cmp::Ordering::Equal => Some(Cow::from("...")),
-                                        core::cmp::Ordering::Greater => None,
+                                        (format!("{context} invoked a write syscall of an snprintf-constructed string ({srcptr:#x}) using the computed length from snprintf, {warning_string} (wrote {count}, computed {computed}, restricted size {size})"), Level::Warn)
                                     }
-                                }))
-                            } else {
-                                Either::Right(
-                                    stacktrace
-                                        .frames()
-                                        .iter()
-                                        .enumerate().chain(extra_stacktraces.iter().flat_map(|s| s.frames().iter().enumerate()))
-                                        .flat_map(|(i, frame)| {
-                                            match i.cmp(&visibility_depth) {
-                                                core::cmp::Ordering::Less => {
-                                                    let spacing = if i == 0 { "\n" } else { "" };
-                                                    Some(Cow::from(format!("{spacing}#{i} 0x{:x}", frame.ip)))
+                                    OsSanitizerReport::Sprintf { dest, .. } => {
+                                        (format!("{context} invoked sprintf with stack dest pointer (dest: 0x{dest:x})"), Level::Warn)
+                                    }
+                                    OsSanitizerReport::Strcpy { len_checked: true, dest, src, .. } => {
+                                        (format!("{context} invoked strcpy with stack dest pointer with a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Info)
+                                    }
+                                    OsSanitizerReport::Strcpy { len_checked: false, dest, src, .. } => {
+                                        (format!("{context} invoked strcpy with stack dest pointer without a length check (dest: 0x{dest:x}, src: 0x{src:x})"), Level::Warn)
+                                    }
+                                    OsSanitizerReport::Strncpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
+                                        (format!("{context} invoked strncpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info)
+                                    }
+                                    OsSanitizerReport::Strncpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
+                                        (format!("{context} invoked strncpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn)
+                                    }
+                                    OsSanitizerReport::Memcpy { variant: CopyViolation::Strlen, len, dest, src, .. } => {
+                                        (format!("{context} invoked memcpy with src pointer determining copied length (dest: 0x{dest:x}, src: 0x{src:x}, len: {len})"), Level::Info)
+                                    }
+                                    OsSanitizerReport::Memcpy { variant: CopyViolation::Malloc, allocated, len, dest, src, .. } => {
+                                        (format!("{context} invoked memcpy with src pointer allocated with less length than specified available (dest: 0x{dest:x} (allocated: {allocated}), src: 0x{src:x}, len: {len})"), Level::Warn)
+                                    }
+                                    OsSanitizerReport::Open { i_mode, filename, variant, .. } => {
+                                        let Ok(filename) = (unsafe {
+                                            CStr::from_ptr(filename.as_ptr() as *const c_char).to_str()
+                                        }) else {
+                                            return;
+                                        };
+
+                                        let filetype = i_mode >> 12;
+                                        let filetype = match filetype {
+                                            0x1 => "fifo",
+                                            0x2 => "chardev",
+                                            0x4 => "directory",
+                                            0x6 => "blockdev",
+                                            0x8 => "file",
+                                            0xA => "symlink",
+                                            0xC => "socket",
+                                            _ => unreachable!(),
+                                        };
+
+                                        match variant {
+                                            OpenViolation::Perms => {
+                                                let mut rendered = [0; 9];
+                                                for (i, e) in rendered.iter_mut().enumerate() {
+                                                    let b = if i_mode & (0b1 << (9 - i - 1)) != 0 {
+                                                        match i % 3 {
+                                                            0 => b'r',
+                                                            1 => b'w',
+                                                            2 => b'x',
+                                                            _ => unreachable!(),
+                                                        }
+                                                    } else {
+                                                        b'-'
+                                                    };
+                                                    *e = b;
                                                 }
-                                                core::cmp::Ordering::Equal => Some(Cow::from("...")),
-                                                core::cmp::Ordering::Greater => None,
+                                                let rendered = core::str::from_utf8(&rendered).unwrap();
+
+                                                if i_mode & 0xF000 == 0x8000 || i_mode & 0xF000 == 0x4000 {
+                                                    let level = if Command::new("ls")
+                                                        .arg(filename)
+                                                        .uid(0x1337).gid(0x1337)
+                                                        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+                                                        .status().await
+                                                        .map_or(false, |v| v.success()) {
+                                                        Level::Error
+                                                    } else {
+                                                        Level::Warn
+                                                    };
+                                                    (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), level)
+                                                } else {
+                                                    (format!("{context} opened `{filename}' (a {filetype}) with permissions {rendered}"), Level::Info)
+                                                }
                                             }
-                                        }),
-                                )
-                            };
+                                            OpenViolation::Toctou(variant, second_stack_id) => {
+                                                let Ok(stacktrace) = stacktraces.get(&(second_stack_id as u32), 0) else {
+                                                    warn!("Couldn't recover the stacktrace of the executable {executable}.");
+                                                    return;
+                                                };
+                                                extra_stacktraces.push(stacktrace);
+                                                (format!("{context} opened `{filename}' (a {filetype}) after accessing it via {variant}, a known TOCTOU pattern"), Level::Info)
+                                            }
+                                        }
+                                    }
+                                    OsSanitizerReport::UnsafeOpen {
+                                        original, filename, uid, gid, uids, gids, mask, everyone, ..
+                                    } => {
+                                        let Ok(filename) = CStr::from_bytes_until_nul(filename.as_slice()).map(|s| s.to_string_lossy()) else {
+                                            return;
+                                        };
+                                        let Ok(original) = (if let Some(original) = &original {
+                                            CStr::from_bytes_until_nul(original.as_slice()).map(|s| s.to_string_lossy())
+                                        } else {
+                                            Ok(Cow::from("<unrecoverable>"))
+                                        }) else {
+                                            return;
+                                        };
+                                        let uids = uids.into_iter().take_while(|i| *i != 0).map(|uid| get_user_by_uid(uid).map_or_else(|| uid.to_string(), |user| {
+                                            user.name().to_string_lossy().to_string()
+                                        })).collect::<Vec<_>>().join(",");
+                                        let gids = gids.into_iter().take_while(|i| *i != 0).map(|gid| get_group_by_gid(gid).map_or_else(|| gid.to_string(), |group| {
+                                            group.name().to_string_lossy().to_string()
+                                        })).collect::<Vec<_>>().join(",");
+                                        let level = if mask & 0x1 != 0 {
+                                            Level::Error
+                                        } else if uid == 0 || gid == 0 {
+                                            Level::Warn
+                                        } else {
+                                            Level::Info
+                                        };
+                                        let uid = get_user_by_uid(uid).map_or_else(|| uid.to_string(), |user| {
+                                            user.name().to_string_lossy().to_string()
+                                        });
+                                        let gid = get_group_by_gid(gid).map_or_else(|| gid.to_string(), |group| {
+                                            group.name().to_string_lossy().to_string()
+                                        });
+                                        let mut perms = Vec::new();
+                                        {
+                                            let mut i = 1;
+                                            static PERM_ITER: [&str; 8] = ["MAY_EXEC", "MAY_WRITE", "MAY_READ", "MAY_APPEND", "MAY_ACCESS", "MAY_OPEN", "MAY_CHDIR", "MAY_NOT_BLOCK"];
+                                            for perm in PERM_ITER {
+                                                if i & mask != 0 {
+                                                    perms.push(perm);
+                                                }
+                                                i <<= 1;
+                                            }
+                                        }
+                                        let and_everyone = if everyone {
+                                            ", as well as everyone else"
+                                        } else {
+                                            ""
+                                        };
+                                        (format!("{context}, acting as {uid}:{gid}, attempted to access {filename} (originally as {original}) with {perms:?} ({mask:#x}), which may be intercepted by uids [{uids}] and gids [{gids}]{and_everyone}"), level)
+                                    }
+                                    OsSanitizerReport::Access { .. } => {
+                                        (format!("{context} invoked access, which is a syscall wrapper explicitly warned against"), Level::Info)
+                                    }
+                                    OsSanitizerReport::Gets { .. } => {
+                                        (format!("{context} invoked gets, which is incredibly stupid"), Level::Error)
+                                    }
+                                    OsSanitizerReport::RwxVma { start, end, .. } => {
+                                        (format!("{context} updated a memory region at {start:#x}-{end:#x} to be simultaneously writable and executable"), Level::Warn)
+                                    }
+                                    OsSanitizerReport::FixedMmap { protection, variant, .. } => {
+                                        match variant {
+                                            FixedMmapViolation::HintUsed => {
+                                                if protection & PROT_EXEC as u64 != 0 {
+                                                    (format!("{context} attempted to map an executable memory region at a fixed address"), Level::Warn)
+                                                } else {
+                                                    (format!("{context} attempted to map an non-executable memory region at a fixed address"), Level::Info)
+                                                }
+                                            }
+                                            FixedMmapViolation::FixedMmapUnmapped => {
+                                                (format!("{context} mapped a memory region with MAP_FIXED without preallocating at the same region"), Level::Warn)
+                                            }
+                                            FixedMmapViolation::FixedMmapBadProt => {
+                                                (format!("{context} mapped a memory region with MAP_FIXED on a memory region which was allocated with non-zero protections"), Level::Info)
+                                            }
+                                        }
+                                    }
+                                    OsSanitizerReport::LeakyVessel { orig_pid, orig_uid, chdir_stack, setuid_stack, .. } => {
+                                        let (msg, level) = if setuid_stack != 0 {
+                                            let Ok(stacktrace) = stacktraces.get(&(setuid_stack as u32), 0) else {
+                                                warn!("Couldn't recover the stacktrace of the executable {executable}.");
+                                                return;
+                                            };
+                                            extra_stacktraces.push(stacktrace);
+                                            ("running as root before performing setuid", Level::Error)
+                                        } else if orig_uid != 0 {
+                                            ("a low-privilege process", Level::Info)
+                                        } else {
+                                            ("running as root", Level::Warn)
+                                        };
 
-                            let stacktrace = frame_iter
-                                .collect::<Vec<_>>();
+                                        let Ok(stacktrace) = stacktraces.get(&(chdir_stack as u32), 0) else {
+                                            warn!("Couldn't recover the stacktrace of the executable {executable}.");
+                                            return;
+                                        };
+                                        extra_stacktraces.push(stacktrace);
 
-                            // since we can't follow these stacktraces, best skip them
-                            // let level = if stacktrace.len() <= 2 { Level::Info } else { level };
+                                        (format!("{context} (originally pid: {orig_pid}), {msg}, exec'd after chdir following fork, which may constitute a leaky vessel vulnerability"), level)
+                                    }
+                                    OsSanitizerReport::Statistics { .. } => unreachable!("Handled in an earlier branch.")
+                                };
 
-                            let stacktrace = stacktrace.join("\n");
-                            log!(level, "{message}; stacktrace:{stacktrace}");
-                        });
+                                // only error condition is if rx is closed
+                                let maybe_resolver =
+                                    procmap.as_ref().map(|procmap| ProcMapOffsetResolver::from(procmap.as_ref()));
+
+                                let frame_iter = if let Some(resolver) = maybe_resolver.as_ref() {
+                                    Either::Left(stacktrace.frames().iter().enumerate().chain(extra_stacktraces.iter().flat_map(|s| s.frames().iter().enumerate())).flat_map(|(i, frame)| {
+                                        match i.cmp(&visibility_depth) {
+                                            core::cmp::Ordering::Less => {
+                                                let spacing = if i == 0 { "\n" } else { "" };
+                                                Some(Cow::from(resolver.resolve_file_offset(frame.ip).map_or_else(
+                                                    || format!("{spacing}#{i} 0x{:x}", frame.ip),
+                                                    move |(path, offset)| {
+                                                        if let Some(path) = path.to_str() {
+                                                            format!("{spacing}#{i} 0x{:x}  ({path}+0x{offset:x})", frame.ip)
+                                                        } else {
+                                                            format!(
+                                                                "{spacing}#{i} 0x{:x}  {}+0x{offset:x} (name adjusted for utf-8 compat)",
+                                                                frame.ip,
+                                                                path.to_string_lossy()
+                                                            )
+                                                        }
+                                                    },
+                                                )))
+                                            }
+                                            core::cmp::Ordering::Equal => Some(Cow::from("...")),
+                                            core::cmp::Ordering::Greater => None,
+                                        }
+                                    }))
+                                } else {
+                                    Either::Right(
+                                        stacktrace
+                                            .frames()
+                                            .iter()
+                                            .enumerate().chain(extra_stacktraces.iter().flat_map(|s| s.frames().iter().enumerate()))
+                                            .flat_map(|(i, frame)| {
+                                                match i.cmp(&visibility_depth) {
+                                                    core::cmp::Ordering::Less => {
+                                                        let spacing = if i == 0 { "\n" } else { "" };
+                                                        Some(Cow::from(format!("{spacing}#{i} 0x{:x}", frame.ip)))
+                                                    }
+                                                    core::cmp::Ordering::Equal => Some(Cow::from("...")),
+                                                    core::cmp::Ordering::Greater => None,
+                                                }
+                                            }),
+                                    )
+                                };
+
+                                let stacktrace = frame_iter
+                                    .collect::<Vec<_>>();
+
+                                // since we can't follow these stacktraces, best skip them
+                                // let level = if stacktrace.len() <= 2 { Level::Info } else { level };
+
+                                let stacktrace = stacktrace.join("\n");
+                                log!(level, "{message}; stacktrace:{stacktrace}");
+                            });
+                        }
                     }
-                }
-            }));
+                }));
+            }
         }
     }
 

@@ -1,8 +1,10 @@
+use crate::{REPORT_SCRATCH, STATS_QUEUE};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::maps::LruHashMap;
 use aya_ebpf::programs::TracePointContext;
 use aya_ebpf_macros::{map, tracepoint};
 use core::mem::variant_count;
+use os_sanitizer_common::OsSanitizerError::{CouldntAccessBuffer, SerialisationError};
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, PassId};
 
 #[map]
@@ -40,7 +42,15 @@ unsafe fn try_tracepoint_sched_exit_stats(
             if stats.iter().all(|&e| e == 0) {
                 return Ok(0); // no point in reporting this
             }
-            let _ = crate::emit_report(probe, &report); // ignore error, we have post-report actions
+
+            let ptr = REPORT_SCRATCH
+                .get_ptr_mut(0)
+                .ok_or(CouldntAccessBuffer("emit-report"))?;
+            let buf = &mut *ptr;
+            report
+                .serialise_into(buf)
+                .map_err(|_| SerialisationError("emit-report"))?;
+            STATS_QUEUE.output(probe, buf, 0);
         }
 
         let _ = STATISTICS.remove(&pid_tgid);

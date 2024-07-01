@@ -18,12 +18,14 @@ use aya_log_ebpf::{debug, error, info, warn};
 
 use os_sanitizer_common::CopyViolation::Strlen;
 use os_sanitizer_common::OsSanitizerError::*;
+use os_sanitizer_common::PassId;
 use os_sanitizer_common::{
     CopyViolation, MaybeOwnedArray, OsSanitizerError, OsSanitizerReport, ToctouVariant,
     EXECUTABLE_LEN, SERIALIZED_SIZE, USERSTR_LEN,
 };
 
 use crate::binding::vm_area_struct;
+use crate::statistics::update_tracking;
 use crate::strlen::STRLEN_MAP;
 
 pub(crate) type Hasher = rustc_hash::FxHasher;
@@ -63,6 +65,10 @@ pub static FLAGGED_FILE_OPEN_PIDS: LruHashMap<u64, (ToctouVariant, u64)> =
 
 #[map(name = "FUNCTION_REPORT_QUEUE")]
 pub static FUNCTION_REPORT_QUEUE: PerfEventArray<[u8; SERIALIZED_SIZE]> =
+    PerfEventArray::with_max_entries(1 << 20, 0);
+
+#[map(name = "STATS_QUEUE")]
+pub static STATS_QUEUE: PerfEventArray<[u8; SERIALIZED_SIZE]> =
     PerfEventArray::with_max_entries(1 << 20, 0);
 
 #[map(name = "STACKTRACES")]
@@ -261,6 +267,7 @@ macro_rules! always_bad_call {
                 if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
                     return Ok(0);
                 }
+                update_tracking(pid_tgid, PassId::[< uprobe_ $name >]);
 
                 let stack_id = STACK_MAP
                     .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)

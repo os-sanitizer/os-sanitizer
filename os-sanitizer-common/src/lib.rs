@@ -63,6 +63,8 @@ pub enum PassId {
     check_system_absolute,
     check_system_mutability,
     fentry_vfs_fstatat,
+    uprobe_access,
+    uprobe_gets,
 }
 
 #[repr(u32)]
