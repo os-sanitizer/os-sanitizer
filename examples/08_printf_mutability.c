@@ -4,8 +4,9 @@
 // 1. use format string that lies in writable memory
 
 #include <stdio.h>
-
 #include "common.h"
+
+long interation_count = 0;
 
 int main (int argc, char **argv)
 {

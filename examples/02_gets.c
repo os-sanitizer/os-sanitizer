@@ -12,6 +12,8 @@
 // forward declare -- this is not provided in stdio and causes a compiler error
 extern char *gets(char *s);
 
+long interation_count = 0;
+
 int main ()
 {
     debug_printf("Let's try gets.\n");

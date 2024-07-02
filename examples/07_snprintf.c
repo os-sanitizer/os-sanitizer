@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include "common.h"
 
+long interation_count = 0;
+
 int main ()
 {
     char str_buf[16] = "0123456789abcdef";

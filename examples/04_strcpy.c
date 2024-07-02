@@ -7,6 +7,8 @@
 #include <string.h>
 #include "common.h"
 
+long interation_count = 0;
+
 int main ()
 {
     // stacksmashing case

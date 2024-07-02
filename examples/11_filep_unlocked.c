@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include "common.h"
 
+long interation_count = 0;
+
 void *unlocked_function_call_1(void* fp)
 {
     debug_printf("Thread 1\n");

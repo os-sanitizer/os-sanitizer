@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include "common.h"
 
+long interation_count = 0;
+
 int main ()
 {
     char buffer [16];

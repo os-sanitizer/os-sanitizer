@@ -11,6 +11,8 @@
 #include <fcntl.h>
 #include "common.h"
 
+long interation_count = 0;
+
 int main ()
 {
     int fd = 0;

@@ -10,6 +10,8 @@
 #include <errno.h>
 #include "common.h"
 
+long interation_count = 0;
+
 int main ()
 {
     // first do $ chmod 666 05_demo_file.txt

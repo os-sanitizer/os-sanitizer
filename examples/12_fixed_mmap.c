@@ -14,6 +14,8 @@
 #include <sys/mman.h>
 #include "common.h"
 
+long interation_count = 0;
+
 int main ()
 {
     long pagesize = sysconf(_SC_PAGE_SIZE);
