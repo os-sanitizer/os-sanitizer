@@ -17,8 +17,8 @@ long interation_count = 0;
 
 int main ()
 {
-    int fd;
     const char *open_filename = "sensitive_information.txt";
+    int fd = open(open_filename, O_RDONLY);
     long pagesize = sysconf(_SC_PAGE_SIZE);
     debug_printf("Page Size: %ld\n", pagesize);
 
@@ -27,7 +27,6 @@ int main ()
 
     MICROBENCHMARK_LOOP_START
 
-    fd = open(open_filename, O_RDONLY);
     int *addr = mmap(NULL, pagesize , PROT_READ , MAP_PRIVATE, fd, 0);
     debug_printf("Pointer to mmap(ped) area : %p\n", addr);
     int ret = mprotect(addr, pagesize, PROT_WRITE | PROT_EXEC);
@@ -37,10 +36,10 @@ int main ()
         debug_printf("mmap(ped) memory set to write + execute.\n");
     }
     munmap(addr, pagesize);
-    close(fd);
     debug_printf("Success.\n");
 
     MICROBENCHMARK_LOOP_END
 
+    close(fd);
     return 0;
 }

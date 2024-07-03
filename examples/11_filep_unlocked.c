@@ -52,6 +52,7 @@ int main ()
 
     fp = fopen("11_filep_unlocked_demo_file.txt", "w");
     debug_printf("Got %p. Errno: %d\n", fp, errno);
+    setvbuf(fp, NULL, _IONBF, 0);
 
     MICROBENCHMARK_LOOP_START
 

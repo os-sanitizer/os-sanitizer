@@ -17,7 +17,8 @@ long interation_count = 0;
 int main ()
 {
     debug_printf("Let's try gets.\n");
-    char string[10];
+    char string[5120];
+    setvbuf(stdin, NULL, _IONBF, 0);
 
     MICROBENCHMARK_LOOP_START
 

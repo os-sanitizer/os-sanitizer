@@ -10,6 +10,8 @@ long interation_count = 0;
 
 int main (int argc, char **argv)
 {
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     MICROBENCHMARK_LOOP_START
 
     printf(argv[0]);
