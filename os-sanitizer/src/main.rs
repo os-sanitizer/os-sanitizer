@@ -288,7 +288,8 @@ async fn main() -> Result<(), anyhow::Error> {
         args.filep_unlocked = true;
         args.fixed_mmap = true;
         args.interceptable_path = true;
-        args.leaky_vessel = true;
+        // disabled for evaluation
+        // args.leaky_vessel = true;
     }
 
     if !(args.access
