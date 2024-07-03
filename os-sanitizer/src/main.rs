@@ -251,11 +251,11 @@ struct Args {
     interceptable_path: bool,
     #[arg(
         long,
-        help = "Log potential Leaky Vessel issues; see: https://www.bleepingcomputer.com/news/security/leaky-vessels-flaws-allow-hackers-to-escape-docker-runc-containers"
+        help = "Log potential Leaky Vessel issues; see: https://www.bleepingcomputer.com/news/security/leaky-vessels-flaws-allow-hackers-to-escape-docker-runc-containers Note: not included in option --all"
     )]
     leaky_vessel: bool,
 
-    #[arg(long, help = "Enable all reporting strategies")]
+    #[arg(long, help = "Enable all reporting strategies except --leaky-vessel")]
     all: bool,
 
     #[arg(
