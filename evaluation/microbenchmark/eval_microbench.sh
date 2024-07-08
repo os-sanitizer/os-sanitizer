@@ -34,7 +34,7 @@ do
     microbenchmark_executable=${example_name[${example_count}]}
 
     # 5 benchmark run with os-san + 5 benchmark run without os-san
-    for i in $(seq 0 9);
+    for i in $(seq 0 19);
     do
 	    # Check if os-san is already running -> We should not do evaluation in that case.
 	    if pgrep os-sanitizer
@@ -43,7 +43,7 @@ do
 		    exit 1;
 	    fi
 
-    	if [[ $i -lt 5 ]]
+    	if [[ $i -lt 10 ]]
 		then
 		    echo -e "\tWith os-sanitizer run $i and type --$os_san_type"
 	        sudo env RUST_LOG=debug /usr/bin/time -v os-sanitizer --${os_san_type} > ../evaluation/microbenchmark/results/os_sanitizer_log_${i}_${os_san_type}_${info_tag} 2>&1 &
@@ -60,7 +60,7 @@ do
 			/usr/bin/time -v ./${microbenchmark_executable} > ../evaluation/microbenchmark/results/example_log_${i}_${os_san_type}_${info_tag} 2>&1
 		fi
 
-    	if [[ $i -lt 5 ]]
+    	if [[ $i -lt 10 ]]
 		then
 	        # unfinished business?
 	        sleep 3
@@ -73,7 +73,7 @@ do
 	    echo -e "$(cat ../evaluation/microbenchmark/results/example_log_${i}_${os_san_type}_${info_tag} | grep "Iterations: " | sed 's/^/\t\t/')"
 	    echo -e "\t\tMicrobenchmark execution time: $(cat ../evaluation/microbenchmark/results/example_log_${i}_${os_san_type}_${info_tag} | grep "Elapsed (wall clock) time")"
 
-    	if [[ $i -lt 5 ]]
+    	if [[ $i -lt 10 ]]
 		then
 		    # os-san only prints 15 chars of executable name
 		    echo -e "\t\tos-san hits: $(cat ../evaluation/microbenchmark/results/os_sanitizer_log_${i}_${os_san_type}_${info_tag} | grep "os_sanitizer] ${microbenchmark_executable:0:15}" | wc -l)"
