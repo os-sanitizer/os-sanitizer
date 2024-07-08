@@ -1,8 +1,8 @@
 // --fixed-mmap option usecase example
 
 // triggering case:
-// 1. Create a memaligned int (mmap uses page aligned addresses)
-// 2. Force mmap to create a mapping on the same address as above int
+// 1. Create a memory mapping at a kernel-assigned address which is readable and writable
+// 2. Force mmap to create a mapping on the same address as above
 
 #include <assert.h>
 #include <errno.h>
