@@ -258,6 +258,9 @@ struct Args {
     #[arg(long, help = "Enable all reporting strategies except --leaky-vessel")]
     all: bool,
 
+    #[arg(long, help = "Enable recommended set of reporting strategies. Includes all except --memcpy, --strcpy, --strncpy, and --leaky-vessel for reduced performance impact.")]
+    reference_policy: bool,
+
     #[arg(
         long,
         short,
@@ -280,6 +283,26 @@ async fn main() -> Result<(), anyhow::Error> {
         args.security_file_open = true;
         args.strncpy = true;
         args.strcpy = true;
+        args.sprintf = true;
+        args.snprintf = true;
+        args.printf_mutability = true;
+        args.system_mutability = true;
+        args.system_absolute = true;
+        args.filep_unlocked = true;
+        args.fixed_mmap = true;
+        args.interceptable_path = true;
+        // disabled for evaluation
+        // args.leaky_vessel = true;
+    }
+
+    if args.reference_policy {
+        args.access = true;
+        args.gets = true;
+        args.rwx_mem = true;
+        // args.memcpy = true;
+        args.security_file_open = true;
+        // args.strncpy = true;
+        // args.strcpy = true;
         args.sprintf = true;
         args.snprintf = true;
         args.printf_mutability = true;
