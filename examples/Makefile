@@ -40,7 +40,7 @@ clean:
 	gcc $(OPTION) 10_system_abs.c common.c -o 10_system_abs
 
 11_filep_unlocked: 11_filep_unlocked.c
-	gcc $(OPTION) 11_filep_unlocked.c common.c -o 11_filep_unlocked
+	gcc $(OPTION) -DMICROBENCHMARK_FP_UNL 11_filep_unlocked.c common.c -o 11_filep_unlocked
 
 12_fixed_mmap: 12_fixed_mmap.c
 	gcc $(OPTION) 12_fixed_mmap.c common.c -o 12_fixed_mmap
