@@ -7,7 +7,6 @@
 #include <errno.h>
 #include <stdio.h>
 #include <unistd.h>
-
 #include "common.h"
 
 long interation_count = 0;
