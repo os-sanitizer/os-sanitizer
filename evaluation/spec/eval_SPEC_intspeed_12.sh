@@ -1,5 +1,11 @@
 #!/bin/sh
 
+#
+# Copyright (c) OS-Sanitizer developers, 2024, licensed under the EUPL-1.2-or-later.
+#
+# See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
+#
+
 # Pre run checklist: 1.) os_san_type 2.) for loop iterations
 
 os_san_type=system-absolute

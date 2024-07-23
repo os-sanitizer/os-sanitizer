@@ -1,3 +1,7 @@
+// Copyright (c) OS-Sanitizer developers, 2024, licensed under the EUPL-1.2-or-later.
+//
+// See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
+
 use core::mem::offset_of;
 
 use aya_ebpf::cty::{c_char, c_void, uintptr_t};

@@ -1,3 +1,7 @@
+// Copyright (c) OS-Sanitizer developers, 2024, licensed under the EUPL-1.2-or-later.
+//
+// See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
+
 use std::{path::PathBuf, process::Command};
 
 use clap::Parser;

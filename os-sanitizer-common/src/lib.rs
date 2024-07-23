@@ -1,3 +1,7 @@
+// Copyright (c) OS-Sanitizer developers, 2024, licensed under the EUPL-1.2-or-later.
+//
+// See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
+
 #![feature(variant_count)]
 #![cfg_attr(not(feature = "user"), no_std)]
 

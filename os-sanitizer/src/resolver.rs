@@ -1,3 +1,7 @@
+// Copyright (c) OS-Sanitizer developers, 2024, licensed under the EUPL-1.2-or-later.
+//
+// See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
+
 use libc::pid_t;
 use std::path::Path;
 use std::{

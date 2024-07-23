@@ -1,5 +1,11 @@
 #!/bin/bash
 
+#
+# Copyright (c) OS-Sanitizer developers, 2024, licensed under the EUPL-1.2-or-later.
+#
+# See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
+#
+
 # Pre run checklist: 1.) os_san_option 2.) for loop iterations
 
 os_san_option=("access" "gets" "rwx-mem" "memcpy" "security-file-open" "strncpy" "strcpy" "sprintf" "snprintf" "printf-mutability" "system-mutability" "system-absolute" "filep-unlocked" "fixed-mmap" "interceptable-path" "all" "none")

@@ -1,3 +1,7 @@
+// Copyright (c) OS-Sanitizer developers, 2024, licensed under the EUPL-1.2-or-later.
+//
+// See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
+
 use aya_ebpf::bindings::__u64;
 use aya_ebpf::cty::{c_void, uintptr_t};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;

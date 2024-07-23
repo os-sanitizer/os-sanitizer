@@ -1,3 +1,7 @@
+// Copyright (c) OS-Sanitizer developers, 2024, licensed under the EUPL-1.2-or-later.
+//
+// See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
+
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -258,7 +262,10 @@ struct Args {
     #[arg(long, help = "Enable all reporting strategies except --leaky-vessel")]
     all: bool,
 
-    #[arg(long, help = "Enable recommended set of reporting strategies. Includes all except --memcpy, --strcpy, --strncpy, and --leaky-vessel for reduced performance impact.")]
+    #[arg(
+        long,
+        help = "Enable recommended set of reporting strategies. Includes all except --memcpy, --strcpy, --strncpy, and --leaky-vessel for reduced performance impact."
+    )]
     reference_policy: bool,
 
     #[arg(

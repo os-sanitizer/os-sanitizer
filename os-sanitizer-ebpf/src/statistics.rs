@@ -1,3 +1,7 @@
+// Copyright (c) OS-Sanitizer developers, 2024, licensed under the EUPL-1.2-or-later.
+//
+// See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
+
 use crate::{REPORT_SCRATCH, STATS_QUEUE};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::maps::LruHashMap;
@@ -12,6 +16,7 @@ static STATISTICS: LruHashMap<u64, [u64; variant_count::<PassId>()]> =
     LruHashMap::with_max_entries(1 << 16, 0);
 
 // relieve some stack pressure
+#[cfg(feature = "tracking")]
 static DEFAULT_STATISTICS: [u64; variant_count::<PassId>()] = [0; variant_count::<PassId>()];
 
 #[tracepoint]
@@ -54,11 +59,8 @@ unsafe fn try_tracepoint_sched_exit_stats(
         }
 
         let _ = STATISTICS.remove(&pid_tgid);
-
-        Ok(0)
-    } else {
-        Ok(0)
     }
+    Ok(0)
 }
 
 #[cfg(feature = "tracking")]
