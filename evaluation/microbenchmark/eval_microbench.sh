@@ -6,7 +6,7 @@
 # See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
 #
 
-# Pre run checklist: 1.) os_san_option list 2.) for loop iterations
+# Pre run checklist: 1.) os_san_option list 2.) update info_tag 3.) for loop iterations
 # Required directory structure:
 # os-sanitizer
 # ├── evaluation
@@ -26,7 +26,7 @@ os_san_option=("access" "gets" "rwx-mem" "memcpy" "strcpy" "strncpy" "security-f
 example_name=("01_access" "02_gets" "03_rwx_mem" "04_memcpy" "04_strcpy" "04_strncpy" "05_security_file_open" "06_sprintf" "07_snprintf" "08_printf_mutability" "09_system_mutability" "10_system_abs" "11_filep_unlocked" "12_fixed_mmap" "13_interceptable_path")
 
 example_count=0
-info_tag=02_d193ba1_debug
+info_tag=numer_commit_debug
 
 cd ../../examples
 make clean
