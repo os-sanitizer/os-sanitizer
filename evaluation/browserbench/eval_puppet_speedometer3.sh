@@ -6,10 +6,10 @@
 # See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
 #
 
-# Pre run checklist: 1.) os_san_option 2.) for loop iterations
+# Pre run checklist: 1.) os_san_option 2.) update info_tag 3.) for loop iterations
 
-os_san_option=("access" "gets" "rwx-mem" "memcpy" "security-file-open" "strncpy" "strcpy" "sprintf" "snprintf" "printf-mutability" "system-mutability" "system-absolute" "filep-unlocked" "fixed-mmap" "interceptable-path" "all" "none")
-info_tag=02_1765c4d_debug
+os_san_option=("access" "gets" "rwx-mem" "memcpy" "security-file-open" "strncpy" "strcpy" "sprintf" "snprintf" "printf-mutability" "system-mutability" "system-absolute" "filep-unlocked" "fixed-mmap" "interceptable-path" "reference-policy" "all" "none")
+info_tag=numer_commit_debug
 
 for os_san_type in "${os_san_option[@]}"; 
 do
