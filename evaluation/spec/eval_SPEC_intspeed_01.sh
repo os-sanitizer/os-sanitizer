@@ -6,10 +6,10 @@
 # See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
 #
 
-# Pre run checklist: 1.) os_san_type 2.) for loop iterations
+# Pre run checklist: 1.) os_san_type 2.) update info_tag 3.) for loop iterations
 
 os_san_type=access
-info_tag=00_1765c4d_debug
+info_tag=numer_commit_debug
 
 # 5 benchmark run with os-san
 for i in $(seq 0 9);

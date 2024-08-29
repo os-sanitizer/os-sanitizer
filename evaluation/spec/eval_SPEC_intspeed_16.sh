@@ -6,10 +6,10 @@
 # See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
 #
 
-# Pre run checklist: 1.) os_san_type 2.) for loop iterations
+# Pre run checklist: 1.) os_san_type 2.) update info_tag 3.) for loop iterations
 
-os_san_type=none
-info_tag=00_1765c4d_debug
+os_san_type=reference-policy
+info_tag=numer_commit_debug
 
 # 5 benchmark run with os-san
 for i in $(seq 0 9);
@@ -22,10 +22,10 @@ do
 		exit 1;
 	fi
 
-	echo "Without os-sanitizer run $i and type $os_san_type"
-    # sudo env RUST_LOG=debug /usr/bin/time -v os-sanitizer --${os_san_type} > os_sanitizer_log_${i}_${os_san_type}_${info_tag} 2>&1 &
+	echo "With os-sanitizer run $i and type --$os_san_type"
+    sudo env RUST_LOG=debug /usr/bin/time -v os-sanitizer --${os_san_type} > os_sanitizer_log_${i}_${os_san_type}_${info_tag} 2>&1 &
 	/usr/bin/time -v runcpu --config=s_Example-gcc-linux-x86 --reportable intspeed > cpu_intspeed_log_${i}_${os_san_type}_${info_tag} 2>&1
-	# sudo pkill os-sanitizer
+	sudo pkill os-sanitizer
 	# pkill takes time. If we don't sleep we exit 1 due to pgrep check.
 	sleep 15 
 	echo "Done with run $i"
