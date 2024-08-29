@@ -2,7 +2,7 @@
   "name": "speedometer_eval",
   "version": "1.0.0",
   "description": "speedometer_eval",
-  "main": "app.js",
+  "main": "speedometer3_run.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
