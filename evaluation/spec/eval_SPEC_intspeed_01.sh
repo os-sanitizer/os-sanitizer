@@ -6,7 +6,9 @@
 # See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
 #
 
-# Pre run checklist: 1.) os_san_type 2.) update info_tag 3.) for loop iterations
+# Pre run checklist: 1.) os_san_type 2.) update info_tag 3.) for loop iterations 4.) in SPEC_cpu2017 directory
+# for runcpu
+source shrc
 
 os_san_type=access
 info_tag=numer_commit_debug
