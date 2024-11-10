@@ -9,7 +9,6 @@ user = ["aya", "strum_macros"]
 
 [dependencies]
 aya = { git = "https://github.com/aya-rs/aya.git", optional = true }
-aya-ebpf-cty = { git = "https://github.com/aya-rs/aya.git" }
 strum_macros = { version = "0.26.4", optional = true }
 
 [lib]
