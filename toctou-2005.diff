@@ -1,0 +1,371 @@
+diff --git a/os-sanitizer-common/src/lib.rs b/os-sanitizer-common/src/lib.rs
+index bd5d5cf..aad29d8 100644
+--- a/os-sanitizer-common/src/lib.rs
++++ b/os-sanitizer-common/src/lib.rs
+@@ -270,6 +270,13 @@ pub enum OsSanitizerReport {
+         pid_tgid: u64,
+         stats: MaybeOwnedArray<u64, { variant_count::<PassId>() }>,
+     },
++    Toctou2005 {
++        executable: [u8; EXECUTABLE_LEN],
++        pid_tgid: u64,
++        stack_id: u64,
++        second_stack_id: u64,
++        filename: MaybeOwnedArray<u8, USERSTR_LEN>,
++    },
+ }
+ 
+ trait SerialisedContent {
+@@ -342,6 +349,7 @@ impl OsSanitizerReport {
+             OsSanitizerReport::FixedMmap { .. } => 13,
+             OsSanitizerReport::UnsafeOpen { .. } => 14,
+             OsSanitizerReport::Statistics { .. } => 15,
++            OsSanitizerReport::Toctou2005 { .. } => 16,
+         }])?;
+         let buf = match self {
+             OsSanitizerReport::RwxVma {
+@@ -430,6 +438,12 @@ impl OsSanitizerReport {
+                 pid_tgid,
+                 stack_id,
+                 ..
++            }
++            | OsSanitizerReport::Toctou2005 {
++                executable,
++                pid_tgid,
++                stack_id,
++                ..
+             } => buf
+                 .write(executable)?
+                 .write(&pid_tgid.to_be_bytes())?
+@@ -595,6 +609,14 @@ impl OsSanitizerReport {
+                     buf = buf.write(&stat.to_be_bytes())?;
+                 }
+             }
++            OsSanitizerReport::Toctou2005 {
++                second_stack_id,
++                filename,
++                ..
++            } => {
++                buf.write(&second_stack_id.to_be_bytes())?
++                    .write(filename.as_slice())?;
++            }
+         }
+         Ok(())
+     }
+@@ -890,6 +912,19 @@ impl TryFrom<&[u8]> for OsSanitizerReport {
+                     stats,
+                 }
+             }
++            16 => {
++                let mut second_stack_id = 0;
++                let mut filename = [0u8; USERSTR_LEN];
++                value.read_u64(&mut second_stack_id)?.read(&mut filename)?;
++
++                OsSanitizerReport::Toctou2005 {
++                    executable,
++                    pid_tgid,
++                    stack_id,
++                    second_stack_id,
++                    filename,
++                }
++            }
+             _ => {
+                 unreachable!("did you forget to implement a report type?")
+             }
+diff --git a/os-sanitizer-ebpf/src/main.rs b/os-sanitizer-ebpf/src/main.rs
+index 02099b0..d20ccd2 100644
+--- a/os-sanitizer-ebpf/src/main.rs
++++ b/os-sanitizer-ebpf/src/main.rs
+@@ -57,6 +57,7 @@ mod strncpy;
+ mod sys_openat2;
+ mod system_absolute;
+ mod system_mutability;
++mod toctou_2005;
+ mod vfs_fstatat;
+ 
+ #[map(name = "IGNORED_PIDS")]
+diff --git a/os-sanitizer-ebpf/src/toctou_2005.rs b/os-sanitizer-ebpf/src/toctou_2005.rs
+new file mode 100644
+index 0000000..4b4135b
+--- /dev/null
++++ b/os-sanitizer-ebpf/src/toctou_2005.rs
+@@ -0,0 +1,150 @@
++use core::hash::{Hash, Hasher};
++
++use aya_ebpf::cty::c_void;
++use aya_ebpf::helpers::bpf_get_current_pid_tgid;
++use aya_ebpf::maps::LruHashMap;
++use aya_ebpf::programs::TracePointContext;
++use aya_ebpf_macros::{map, tracepoint};
++
++use os_sanitizer_common::OsSanitizerError;
++use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, Unreachable};
++use os_sanitizer_common::OsSanitizerReport::Toctou2005;
++
++use crate::read_str;
++
++#[map]
++static CREATION_SET: LruHashMap<(u64, u64), u64> = LruHashMap::with_max_entries(1 << 16, 0);
++#[map]
++static REMOVE_SET: LruHashMap<(u64, u64), u64> = LruHashMap::with_max_entries(1 << 16, 0);
++#[map]
++static NORMAL_USE_SET: LruHashMap<(u64, u64), u64> = LruHashMap::with_max_entries(1 << 16, 0);
++#[map]
++static CHECK_SET: LruHashMap<(u64, u64), u64> = LruHashMap::with_max_entries(1 << 16, 0);
++
++// we explicitly chose not to distinguish between File, Dir, and Link variants, since this is
++// a) non-trivial to extract, and
++// b) not important for the actual detection of these issues what flavor of file is used
++#[derive(Copy, Clone)]
++enum ToctouVariant {
++    Creation,
++    Remove,
++    NormalUse,
++    Check,
++}
++
++impl ToctouVariant {
++    #[inline]
++    fn as_map(&self) -> &'static LruHashMap<(u64, u64), u64> {
++        match self {
++            ToctouVariant::Creation => &CREATION_SET,
++            ToctouVariant::Remove => &REMOVE_SET,
++            ToctouVariant::Check => &CHECK_SET,
++            ToctouVariant::NormalUse => &NORMAL_USE_SET,
++        }
++    }
++}
++
++// we macro this out to force unrolling because the verifier cannot work out how to access the maps
++// if they are stored in an array
++macro_rules! report_toctou {
++    ($probe: ident, $key: ident, $pid_tgid: ident, $executable: ident, $stack_id: ident, $existing_stack: ident, $filename: ident, $map: ident) => {
++        if let Some(&$existing_stack) = $map.get(&$key) {
++            let report = Toctou2005 {
++                executable: $executable,
++                pid_tgid: $pid_tgid,
++                stack_id: $stack_id,
++                second_stack_id: $existing_stack,
++                filename: $filename,
++            };
++            crate::emit_report($probe, &report)?;
++        }
++    };
++
++    ($probe: ident, $key: ident, $pid_tgid: ident, $executable: ident, $stack_id: ident, $existing_stack: ident, $filename: ident, $map: ident, $($maps: ident),+) => {
++        report_toctou!($probe, $key, $pid_tgid, $executable, $stack_id, $existing_stack, $filename, $map);
++        report_toctou!($probe, $key, $pid_tgid, $executable, $stack_id, $existing_stack, $filename, $($maps),+);
++    };
++}
++
++macro_rules! define_toctou_tracepoint {
++    ($name: ident, $variant: expr, $offset: literal) => {
++        ::paste::paste! {
++            #[tracepoint]
++            fn [< tracepoint_sched_enter_ $name >](probe: TracePointContext) -> u32 {
++                match unsafe { [< try_tracepoint_sched_enter_ $name >](&probe) } {
++                    Ok(res) => res,
++                    Err(e) => crate::emit_error(&probe, e, concat!(concat!("os_sanitizer_sched_enter_", stringify!($name)), "_tracepoint")),
++                }
++            }
++
++            unsafe fn [< try_tracepoint_sched_enter_ $name >](probe: &TracePointContext) -> Result<u32, OsSanitizerError> {
++                let pid_tgid = bpf_get_current_pid_tgid();
++                if let Ok(uptr) = probe.read_at($offset) {
++                    let filename = read_str(uptr, "toctou filename")?;
++                    let mut hasher = crate::Hasher::default();
++                    filename.hash(&mut hasher);
++                    let hash = hasher.finish();
++
++                    let mut executable = [0; 16];
++                    let stack_id = crate::report_stack_id(probe, "toctou stack ID")?;
++                    let res = aya_ebpf::helpers::gen::bpf_get_current_comm(
++                        executable.as_mut_ptr() as *mut c_void,
++                        executable.len() as u32,
++                    );
++                    if res < 0 {
++                        return Err(CouldntGetComm("toctou comm", res));
++                    }
++
++                    let key = (pid_tgid, hash);
++
++                    match $variant {
++                        ToctouVariant::Creation => {
++                            report_toctou!(
++                                probe,
++                                key,
++                                pid_tgid,
++                                executable,
++                                stack_id,
++                                existing_stack,
++                                filename,
++                                CHECK_SET,
++                                REMOVE_SET
++                            );
++                        }
++                        ToctouVariant::NormalUse => {
++                            report_toctou!(
++                                probe,
++                                key,
++                                pid_tgid,
++                                executable,
++                                stack_id,
++                                existing_stack,
++                                filename,
++                                CHECK_SET,
++                                CREATION_SET,
++                                NORMAL_USE_SET
++                            );
++                        }
++                        ToctouVariant::Remove | ToctouVariant::Check => {
++                            // do nothing; these have no previous
++                        }
++                    }
++
++                    $variant
++                        .as_map()
++                        .insert(&key, &stack_id, 0)
++                        .map_err(|_| Unreachable("Couldn't insert into corresponding set"))?;
++                }
++                Ok(0)
++            }
++        }
++    };
++}
++
++define_toctou_tracepoint!(creation_arg0, ToctouVariant::Creation, 16);
++define_toctou_tracepoint!(creation_arg1, ToctouVariant::Creation, 24);
++define_toctou_tracepoint!(remove_arg0, ToctouVariant::Remove, 16);
++define_toctou_tracepoint!(normal_use_arg0, ToctouVariant::NormalUse, 16);
++define_toctou_tracepoint!(normal_use_arg1, ToctouVariant::NormalUse, 24);
++define_toctou_tracepoint!(check_arg0, ToctouVariant::Check, 16);
++define_toctou_tracepoint!(check_arg1, ToctouVariant::Check, 24);
+diff --git a/os-sanitizer/src/main.rs b/os-sanitizer/src/main.rs
+index cb13492..012af58 100644
+--- a/os-sanitizer/src/main.rs
++++ b/os-sanitizer/src/main.rs
+@@ -253,6 +253,11 @@ struct Args {
+         help = "Log violations of open being used on interceptable paths"
+     )]
+     interceptable_path: bool,
++    #[arg(
++        long,
++        help = "TOCTOUs from: https://webpages.charlotte.edu/jwei8/Jinpeng_Homepage_files/toctou-fast05.pdf"
++    )]
++    toctou_2005: bool,
+ 
+     #[arg(long, help = "Enable all reporting strategies")]
+     all: bool,
+@@ -293,6 +298,7 @@ async fn main() -> Result<(), anyhow::Error> {
+         args.filep_unlocked = true;
+         args.fixed_mmap = true;
+         args.interceptable_path = true;
++        args.toctou_2005 = true;
+     }
+ 
+     if args.reference_policy {
+@@ -311,6 +317,7 @@ async fn main() -> Result<(), anyhow::Error> {
+         args.filep_unlocked = true;
+         args.fixed_mmap = true;
+         args.interceptable_path = true;
++        // args.toctou_2005 = true;
+     }
+ 
+     if !(args.access
+@@ -327,7 +334,8 @@ async fn main() -> Result<(), anyhow::Error> {
+         || args.system_absolute
+         || args.filep_unlocked
+         || args.fixed_mmap
+-        || args.interceptable_path)
++        || args.interceptable_path
++        || args.toctou_2005)
+     {
+         eprintln!("You must specify one of the modes.");
+         <Args as CommandFactory>::command().print_help()?;
+@@ -419,6 +427,7 @@ async fn main() -> Result<(), anyhow::Error> {
+                                     | OsSanitizerReport::Gets { executable, pid_tgid, stack_id, .. }
+                                     | OsSanitizerReport::RwxVma { executable, pid_tgid, stack_id, .. }
+                                     | OsSanitizerReport::FixedMmap { executable, pid_tgid, stack_id, .. }
++                                    | OsSanitizerReport::Toctou2005 { executable, pid_tgid, stack_id, .. }
+                                     => {
+                                         let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
+                                             warn!("Couldn't recover the name of an executable.");
+@@ -704,6 +713,18 @@ async fn main() -> Result<(), anyhow::Error> {
+                                             }
+                                         }
+                                     }
++                                    OsSanitizerReport::Toctou2005 { second_stack_id, filename, .. } => {
++                                        let Ok(filename) = CStr::from_bytes_until_nul(filename.as_slice()).map(|s| s.to_string_lossy()) else {
++                                            return;
++                                        };
++                                        let Ok(stacktrace) = stacktraces.get(&(second_stack_id as u32), 0) else {
++                                            warn!("Couldn't recover the stacktrace of the executable {executable}.");
++                                            return;
++                                        };
++                                        extra_stacktraces.push(stacktrace);
++
++                                        (format!("{context} performed a pattern known to induce TOCTOU on the path {filename}"), Level::Warn)
++                                    }
+                                     OsSanitizerReport::Statistics { .. } => unreachable!("Handled in an earlier branch.")
+                                 };
+ 
+@@ -1055,6 +1076,59 @@ async fn main() -> Result<(), anyhow::Error> {
+         );
+     }
+ 
++    if args.toctou_2005 {
++        attach_tracepoint!(
++            bpf,
++            "sched_enter_creation_arg0",
++            ["syscalls", "sys_enter_creat"],
++            ["syscalls", "sys_enter_open"],
++            ["syscalls", "sys_enter_mknod"],
++            ["syscalls", "sys_enter_mkdir"],
++        );
++        attach_tracepoint!(
++            bpf,
++            "sched_enter_creation_arg1",
++            ["syscalls", "sys_enter_link"],
++            ["syscalls", "sys_enter_symlink"],
++            ["syscalls", "sys_enter_rename"],
++        );
++        attach_tracepoint!(
++            bpf,
++            "sched_enter_remove_arg0",
++            ["syscalls", "sys_enter_rename"],
++            ["syscalls", "sys_enter_rmdir"],
++            ["syscalls", "sys_enter_unlink"],
++        );
++        attach_tracepoint!(
++            bpf,
++            "sched_enter_normal_use_arg0",
++            ["syscalls", "sys_enter_chmod"],
++            ["syscalls", "sys_enter_chown"],
++            ["syscalls", "sys_enter_truncate"],
++            ["syscalls", "sys_enter_utime"],
++            ["syscalls", "sys_enter_chdir"],
++            ["syscalls", "sys_enter_chroot"],
++            ["syscalls", "sys_enter_pivot_root"],
++            ["syscalls", "sys_enter_open"],
++            ["syscalls", "sys_enter_execve"],
++        );
++        attach_tracepoint!(
++            bpf,
++            "sched_enter_normal_use_arg1",
++            ["syscalls", "sys_enter_mount"],
++        );
++        attach_tracepoint!(
++            bpf,
++            "sched_enter_check_arg0",
++            ["syscalls", "sys_enter_access"],
++        );
++        attach_tracepoint!(
++            bpf,
++            "sched_enter_check_arg1",
++            ["syscalls", "sys_enter_statx"],
++        );
++    }
++
+     attach_tracepoint!(bpf, "sched_exit_stats", ["sched", "sched_process_exit"]);
+ 
+     signal::ctrl_c().await?;
