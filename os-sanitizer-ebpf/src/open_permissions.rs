@@ -89,7 +89,8 @@ unsafe fn try_open_permissions_inode(ctx: &LsmContext) -> Result<(), OsSanitizer
             }
         }
 
-        if i_mode & 0x2 != 0 {
+        // globally writable, but sticky bit, means perms are preserved
+        if i_mode & 0x2 != 0 && i_mode & 0o1000 == 0 {
             everyone = true;
         }
 
