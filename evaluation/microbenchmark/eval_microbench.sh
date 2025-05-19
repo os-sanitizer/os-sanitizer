@@ -39,7 +39,7 @@ do
     echo "microbenchmark $os_san_type"
     microbenchmark_executable=${example_name[${example_count}]}
 
-    # 5 benchmark run with os-san + 5 benchmark run without os-san
+    # 10 benchmark runs with os-san + 10 benchmark runs without os-san
     for i in $(seq 0 19);
     do
 	    # Check if os-san is already running -> We should not do evaluation in that case.

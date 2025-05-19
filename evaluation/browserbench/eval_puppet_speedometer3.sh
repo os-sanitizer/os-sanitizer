@@ -14,7 +14,7 @@ info_tag=numer_commit_debug
 for os_san_type in "${os_san_option[@]}"; 
 do
     echo "os-san type $os_san_type"
-    # 5 benchmark run with os-san
+    # 10 benchmark runs with different os-san options (including none)
     for i in $(seq 0 9);
     do
 	    echo "Iteration $i"

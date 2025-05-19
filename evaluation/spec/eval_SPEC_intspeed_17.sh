@@ -13,7 +13,7 @@ source shrc
 os_san_type=none
 info_tag=numer_commit_debug
 
-# 5 benchmark run with os-san
+# 10 benchmark runs without os-san
 for i in $(seq 0 9);
 do
 	echo "Iteration $i"
