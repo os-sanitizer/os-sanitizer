@@ -37,7 +37,7 @@ pub(crate) type Hasher = rustc_hash::FxHasher;
 #[link_section = "license"]
 pub static LICENSE: [u8; 4] = *b"GPL\0";
 
-#[allow(nonstandard_style, unused, clippy::all)]
+#[allow(improper_ctypes_definitions, nonstandard_style, unnecessary_transmutes, unused, clippy::all)]
 mod binding;
 mod do_faccessat;
 mod do_statx;
