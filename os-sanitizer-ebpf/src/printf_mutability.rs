@@ -4,7 +4,7 @@
 
 use aya_ebpf::bindings::{__u64, task_struct};
 use aya_ebpf::cty::{c_long, c_void, uintptr_t};
-use aya_ebpf::helpers::gen::bpf_get_current_comm;
+use aya_ebpf::helpers::generated::bpf_get_current_comm;
 use aya_ebpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
 use aya_ebpf::programs::ProbeContext;
 use aya_ebpf_macros::uprobe;

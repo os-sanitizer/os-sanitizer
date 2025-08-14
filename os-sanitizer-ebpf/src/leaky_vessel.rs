@@ -3,7 +3,7 @@
 // See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
 
 use aya_ebpf::cty::c_void;
-use aya_ebpf::helpers::gen::bpf_get_current_comm;
+use aya_ebpf::helpers::generated::bpf_get_current_comm;
 use aya_ebpf::helpers::{bpf_get_current_pid_tgid, bpf_get_current_uid_gid};
 use aya_ebpf::maps::LruHashMap;
 use aya_ebpf::programs::{FEntryContext, LsmContext, TracePointContext};

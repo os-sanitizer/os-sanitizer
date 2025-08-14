@@ -17,10 +17,11 @@ use std::{
 
 use aya::{
     include_bytes_aligned,
-    maps::{AsyncPerfEventArray, HashMap as AyaHashMap, StackTraceMap},
+    maps::{HashMap as AyaHashMap, StackTraceMap},
     util::online_cpus,
     Btf, Ebpf,
 };
+use aya::maps::PerfEventArray;
 use aya_log::EbpfLogger;
 use bytes::BytesMut;
 use clap::{CommandFactory, Parser};
@@ -34,6 +35,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio::{signal, task};
+use tokio::io::unix::AsyncFd;
 use users::{get_group_by_gid, get_user_by_uid};
 
 use os_sanitizer_common::{
@@ -130,7 +132,7 @@ macro_rules! attach_many_uprobe_uretprobe {
 
         let demangled = ::cpp_demangle::BorrowedSymbol::new($function.as_bytes()).ok().and_then(|mangled| mangled.demangle(&DEMANGLE_OPTIONS).ok()).unwrap_or_else(|| $function.to_string());
         print!("attaching {} {} to {}:{}...", $name, $variant, $library, demangled);
-        if let Err(e) = $program.attach(Some($function), 0, $library, None) {
+        if let Err(e) = $program.attach($function, $library, None, None) {
             println!("failed: {e}");
         } else {
             println!("done");
@@ -374,8 +376,8 @@ async fn main() -> Result<(), anyhow::Error> {
     ignored_pids.insert(this_pid, 0, 0)?;
 
     let mut reports =
-        AsyncPerfEventArray::try_from(bpf.take_map("FUNCTION_REPORT_QUEUE").unwrap())?;
-    let mut stats = AsyncPerfEventArray::try_from(bpf.take_map("STATS_QUEUE").unwrap())?;
+        PerfEventArray::try_from(bpf.take_map("FUNCTION_REPORT_QUEUE").unwrap())?;
+    let mut stats = PerfEventArray::try_from(bpf.take_map("STATS_QUEUE").unwrap())?;
 
     let stacktraces = Arc::new(StackTraceMap::try_from(
         bpf.take_map("STACKTRACES").unwrap(),
@@ -388,9 +390,9 @@ async fn main() -> Result<(), anyhow::Error> {
         HashMap::<u32, (Arc<ProcMap>, JoinHandle<()>)>::new(),
     ));
 
-    for cpu_id in online_cpus()? {
+    for cpu_id in online_cpus().map_err(|(_, e)| e)? {
         for source in [&mut reports, &mut stats] {
-            let mut buf = source.open(cpu_id, None)?;
+            let mut buf = AsyncFd::new(source.open(cpu_id, None)?)?;
             {
                 let stacktraces = stacktraces.clone();
                 let cached_procmaps = cached_procmaps.clone();
@@ -401,7 +403,7 @@ async fn main() -> Result<(), anyhow::Error> {
                         .collect::<Vec<_>>();
 
                     while keep_going.load(Ordering::Relaxed) {
-                        let events = buf.read_events(&mut buffers).await.unwrap();
+                        let events = buf.readable_mut().await.unwrap().get_inner_mut().read_events(&mut buffers).unwrap();
                         for buf in buffers.iter_mut().take(events.read) {
                             let report = buf.iter().as_slice();
                             let Ok(report) = OsSanitizerReport::try_from(report) else {

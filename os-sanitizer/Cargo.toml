@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-aya = { git = "https://github.com/aya-rs/aya.git", features = ["async_tokio"] }
+aya = { git = "https://github.com/aya-rs/aya.git" }
 aya-log = { git = "https://github.com/aya-rs/aya.git" }
 os-sanitizer-common = { path = "../os-sanitizer-common", features = ["user"] }
 
@@ -19,7 +19,7 @@ env_logger = "0.11"
 libc = "0.2"
 log = "0.4"
 once_cell = "1.18.0"
-thiserror = "1.0"
+thiserror = "2.0"
 tokio = { version = "1.25", features = ["macros", "rt", "rt-multi-thread", "fs", "net", "process", "signal", "sync", "time"] }
 users = "0.11.0"
 

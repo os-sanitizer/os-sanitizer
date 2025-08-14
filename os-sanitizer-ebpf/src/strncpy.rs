@@ -4,7 +4,7 @@
 
 use aya_ebpf::cty::{c_void, size_t, uintptr_t};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
-use aya_ebpf::helpers::gen::bpf_get_current_comm;
+use aya_ebpf::helpers::generated::bpf_get_current_comm;
 use aya_ebpf::maps::LruHashMap;
 use aya_ebpf::programs::{ProbeContext, RetProbeContext};
 use aya_ebpf_macros::{map, uprobe, uretprobe};

@@ -5,7 +5,7 @@
 use core::ffi::c_void;
 
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
-use aya_ebpf::helpers::gen::bpf_get_current_comm;
+use aya_ebpf::helpers::generated::bpf_get_current_comm;
 use aya_ebpf::programs::FEntryContext;
 use aya_ebpf_macros::fentry;
 

@@ -5,7 +5,7 @@
 use aya_ebpf::bindings::__u64;
 use aya_ebpf::cty::{c_void, uintptr_t};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
-use aya_ebpf::helpers::gen::bpf_get_current_comm;
+use aya_ebpf::helpers::generated::bpf_get_current_comm;
 use aya_ebpf::programs::ProbeContext;
 use aya_ebpf_macros::uprobe;
 

@@ -12,7 +12,7 @@ use core::hint::unreachable_unchecked;
 use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_ebpf::cty::{c_void, size_t, uintptr_t};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
-use aya_ebpf::helpers::gen::{bpf_get_current_comm, bpf_probe_read_user_str};
+use aya_ebpf::helpers::generated::{bpf_get_current_comm, bpf_probe_read_user_str};
 use aya_ebpf::macros::map;
 use aya_ebpf::macros::uprobe;
 use aya_ebpf::maps::{HashMap, LruHashMap, PerCpuArray, PerfEventArray, StackTrace};
@@ -69,11 +69,11 @@ pub static FLAGGED_FILE_OPEN_PIDS: LruHashMap<u64, (ToctouVariant, u64)> =
 
 #[map(name = "FUNCTION_REPORT_QUEUE")]
 pub static FUNCTION_REPORT_QUEUE: PerfEventArray<[u8; SERIALIZED_SIZE]> =
-    PerfEventArray::with_max_entries(1 << 20, 0);
+    PerfEventArray::new(0);
 
 #[map(name = "STATS_QUEUE")]
 pub static STATS_QUEUE: PerfEventArray<[u8; SERIALIZED_SIZE]> =
-    PerfEventArray::with_max_entries(1 << 20, 0);
+    PerfEventArray::new(0);
 
 #[map(name = "STACKTRACES")]
 pub static STACK_MAP: StackTrace = StackTrace::with_max_entries(1 << 20, 0);

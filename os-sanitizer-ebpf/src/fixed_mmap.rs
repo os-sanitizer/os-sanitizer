@@ -6,7 +6,7 @@ use core::ffi::c_ulong;
 
 use aya_ebpf::bindings::task_struct;
 use aya_ebpf::cty::{c_long, c_void};
-use aya_ebpf::helpers::gen::bpf_get_current_comm;
+use aya_ebpf::helpers::generated::bpf_get_current_comm;
 use aya_ebpf::helpers::{bpf_find_vma, bpf_get_current_pid_tgid, bpf_get_current_task_btf};
 use aya_ebpf::maps::LruHashMap;
 use aya_ebpf::programs::{FEntryContext, ProbeContext, RetProbeContext};
