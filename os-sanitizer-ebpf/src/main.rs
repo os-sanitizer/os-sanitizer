@@ -2,7 +2,6 @@
 //
 // See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
 
-#![feature(variant_count)]
 #![no_std]
 #![no_main]
 

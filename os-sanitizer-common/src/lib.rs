@@ -2,14 +2,12 @@
 //
 // See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
 
-#![feature(variant_count)]
 #![cfg_attr(not(feature = "user"), no_std)]
 
 use core::ffi::c_long;
 #[cfg(feature = "user")]
 use core::mem::size_of;
 use core::mem::size_of_val;
-use core::mem::variant_count;
 
 pub const EXECUTABLE_LEN: usize = 16;
 pub const USERSTR_LEN: usize = 1024;
@@ -69,6 +67,7 @@ pub enum PassId {
     fentry_vfs_fstatat,
     uprobe_access,
     uprobe_gets,
+    __END,
 }
 
 #[repr(u32)]
@@ -277,7 +276,7 @@ pub enum OsSanitizerReport {
     Statistics {
         executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,
-        stats: MaybeOwnedArray<u64, { variant_count::<PassId>() }>,
+        stats: MaybeOwnedArray<u64, { PassId::__END as usize }>,
     },
 }
 
@@ -929,7 +928,7 @@ impl TryFrom<&[u8]> for OsSanitizerReport {
                 }
             }
             16 => {
-                let mut stats = [0u64; variant_count::<PassId>()];
+                let mut stats = [0u64; PassId::__END as usize];
                 for stat in stats.iter_mut() {
                     value = value.read_u64(stat)?;
                 }

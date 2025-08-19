@@ -9,7 +9,7 @@ user = ["aya", "strum_macros"]
 
 [dependencies]
 aya = { git = "https://github.com/aya-rs/aya.git", optional = true }
-strum_macros = { version = "0.26.4", optional = true }
+strum_macros = { version = "0.27.2", optional = true }
 
 [lib]
 path = "src/lib.rs"

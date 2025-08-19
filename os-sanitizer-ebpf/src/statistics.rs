@@ -7,12 +7,11 @@ use aya_ebpf::helpers::bpf_get_current_pid_tgid;
 use aya_ebpf::maps::LruHashMap;
 use aya_ebpf::programs::TracePointContext;
 use aya_ebpf_macros::{map, tracepoint};
-use core::mem::variant_count;
 use os_sanitizer_common::OsSanitizerError::{CouldntAccessBuffer, SerialisationError};
 use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, PassId};
 
 #[map]
-static STATISTICS: LruHashMap<u64, [u64; variant_count::<PassId>()]> =
+static STATISTICS: LruHashMap<u64, [u64; PassId::__END as usize]> =
     LruHashMap::with_max_entries(1 << 16, 0);
 
 // relieve some stack pressure

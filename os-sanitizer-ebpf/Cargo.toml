@@ -4,8 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
+default = ["anon-struct"]
+
 anon-struct = []
 tracking = []
+
+[build-dependencies]
+which = "8"
 
 [dependencies]
 aya-ebpf = { git = "https://github.com/aya-rs/aya.git" }
@@ -19,24 +24,3 @@ paste = "1.0"
 [[bin]]
 name = "os-sanitizer"
 path = "src/main.rs"
-
-[profile.dev]
-opt-level = 3
-debug = true
-debug-assertions = false
-overflow-checks = false
-lto = true
-panic = "abort"
-incremental = false
-codegen-units = 1
-rpath = false
-
-[profile.release]
-opt-level = 3
-debug = true
-lto = true
-panic = "abort"
-codegen-units = 1
-
-[workspace]
-members = []

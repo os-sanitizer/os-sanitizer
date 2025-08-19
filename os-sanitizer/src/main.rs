@@ -9,19 +9,15 @@ use std::time::Duration;
 use std::{
     ffi::{c_char, CStr},
     process::exit,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 
+use aya::maps::PerfEventArray;
 use aya::{
-    include_bytes_aligned,
     maps::{HashMap as AyaHashMap, StackTraceMap},
     util::online_cpus,
-    Btf, Ebpf,
+    Btf,
 };
-use aya::maps::PerfEventArray;
 use aya_log::EbpfLogger;
 use bytes::BytesMut;
 use clap::{CommandFactory, Parser};
@@ -30,12 +26,12 @@ use either::Either;
 use libc::{pid_t, PROT_EXEC};
 use log::{debug, log, warn, Level};
 use once_cell::sync::Lazy;
+use tokio::io::unix::AsyncFd;
 use tokio::process::Command;
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio::{signal, task};
-use tokio::io::unix::AsyncFd;
 use users::{get_group_by_gid, get_user_by_uid};
 
 use os_sanitizer_common::{
@@ -361,13 +357,14 @@ async fn main() -> Result<(), anyhow::Error> {
         debug!("remove limit on locked memory failed, ret is: {}", ret);
     }
 
-    let mut bpf = Ebpf::load(include_bytes_aligned!(
-        "../../target/bpfel-unknown-none/release/os-sanitizer"
-    ))?;
-    if let Err(e) = EbpfLogger::init(&mut bpf) {
-        // This can happen if you remove all log statements from your eBPF program.
-        warn!("failed to initialize eBPF logger: {}", e);
-    }
+    let mut bpf = aya::Ebpf::load(aya::include_bytes_aligned!(concat!(
+        env!("OUT_DIR"),
+        "/os-sanitizer"
+    )))?;
+    // if let Err(e) = EbpfLogger::init(&mut bpf) {
+    //     // This can happen if you remove all log statements from your eBPF program.
+    //     warn!("failed to initialize eBPF logger: {}", e);
+    // }
 
     let mut ignored_pids: AyaHashMap<_, u32, u8> =
         AyaHashMap::try_from(bpf.take_map("IGNORED_PIDS").unwrap())?;
@@ -375,15 +372,14 @@ async fn main() -> Result<(), anyhow::Error> {
     let this_pid = std::process::id();
     ignored_pids.insert(this_pid, 0, 0)?;
 
-    let mut reports =
-        PerfEventArray::try_from(bpf.take_map("FUNCTION_REPORT_QUEUE").unwrap())?;
+    let mut reports = PerfEventArray::try_from(bpf.take_map("FUNCTION_REPORT_QUEUE").unwrap())?;
     let mut stats = PerfEventArray::try_from(bpf.take_map("STATS_QUEUE").unwrap())?;
 
     let stacktraces = Arc::new(StackTraceMap::try_from(
         bpf.take_map("STACKTRACES").unwrap(),
     )?);
 
-    let keep_going = Arc::new(AtomicBool::new(true));
+    let (tx, _rx) = broadcast::channel(1);
     let mut tasks = Vec::new();
 
     let cached_procmaps = Arc::new(Mutex::new(
@@ -396,14 +392,19 @@ async fn main() -> Result<(), anyhow::Error> {
             {
                 let stacktraces = stacktraces.clone();
                 let cached_procmaps = cached_procmaps.clone();
-                let keep_going = keep_going.clone();
+                let mut rx = tx.subscribe();
                 tasks.push(task::spawn(async move {
                     let mut buffers = (0..32)
                         .map(|_| BytesMut::with_capacity(SERIALIZED_SIZE))
                         .collect::<Vec<_>>();
-
-                    while keep_going.load(Ordering::Relaxed) {
-                        let events = buf.readable_mut().await.unwrap().get_inner_mut().read_events(&mut buffers).unwrap();
+                    loop {
+                        let mut buf = tokio::select! {
+                            biased;
+                            _ = rx.recv() => break,
+                            buf = buf.readable_mut() => buf,
+                        }.unwrap();
+                        let events = buf.get_inner_mut().read_events(&mut buffers).unwrap();
+                        buf.clear_ready();
                         for buf in buffers.iter_mut().take(events.read) {
                             let report = buf.iter().as_slice();
                             let Ok(report) = OsSanitizerReport::try_from(report) else {
@@ -1103,6 +1104,11 @@ async fn main() -> Result<(), anyhow::Error> {
     attach_tracepoint!(bpf, "sched_exit_stats", ["sched", "sched_process_exit"]);
 
     signal::ctrl_c().await?;
+    tx.send(())?;
+
+    for task in tasks {
+        task.await?;
+    }
 
     Ok(())
 }
