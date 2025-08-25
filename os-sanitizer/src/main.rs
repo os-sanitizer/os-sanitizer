@@ -46,6 +46,27 @@ mod resolver;
 const PROCMAP_CACHE_TIME: u64 = 30;
 static DEMANGLE_OPTIONS: Lazy<DemangleOptions> = Lazy::new(DemangleOptions::new);
 
+macro_rules! attach_fexit {
+    ($bpf: expr, $btf: expr, $name: literal, $progname: literal) => {
+        #[allow(unused_imports)]
+        use ::std::io::Write as _;
+
+        print!("loading {} (fexit: {})...", $progname, $name);
+        let _ = std::io::stdout().lock().flush();
+        let program: &mut ::aya::programs::FExit = $bpf
+            .program_mut(concat!("fexit_", $progname))
+            .unwrap()
+            .try_into()?;
+        program.load($name, &$btf)?;
+        program.attach()?;
+        println!("done");
+    };
+
+    ($bpf: expr, $btf: expr, $name: literal) => {
+        attach_fentry!($bpf, $btf, $name, $name)
+    };
+}
+
 macro_rules! attach_fentry {
     ($bpf: expr, $btf: expr, $name: literal, $progname: literal) => {
         #[allow(unused_imports)]
@@ -1066,6 +1087,7 @@ async fn main() -> Result<(), anyhow::Error> {
     if args.interceptable_path {
         attach_fentry!(bpf, btf, "path_openat", "clear_open_permissions");
         attach_fentry!(bpf, btf, "do_filp_open");
+        attach_fexit!(bpf, btf, "do_filp_open");
         attach_fentry!(bpf, btf, "may_open");
         attach_lsm!(bpf, btf, "inode_permission", "open_permissions_inode");
         attach_fentry!(bpf, btf, "security_file_open", "open_permissions_file");

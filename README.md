@@ -17,18 +17,7 @@ To generate a fresh set of bindings, use the command:
 aya-tool generate task_struct dentry > os-sanitizer-ebpf/src/binding.rs
 ```
 
-**You will need to do this every kernel upgrade.**
-
-## Build eBPF
-
-```bash
-cargo xtask build-ebpf --release
-```
-
-Users of older kernels (version <6) may need to additionally add the `--compat` flag.
-You may optionally also enable statistics tracking ("how many times was each program used?") by passing the `--tracking` flag.
-
-## Build Userspace
+## Build
 
 ```bash
 cargo build --release
@@ -48,7 +37,6 @@ If you used a different target, you will need to use `./target/<TARGET>/release/
 ### Installing as a service
 
 ```bash
-cargo xtask build-ebpf --release
 cargo build --release
 sudo cp target/release/os-sanitizer /usr/local/sbin/
 sudo cp target/release/os-sanitizer-symbolizer /usr/local/bin/

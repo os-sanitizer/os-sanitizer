@@ -8,9 +8,9 @@ use aya_ebpf::cty::{c_char, c_void, uintptr_t};
 use aya_ebpf::helpers::generated::bpf_get_current_comm;
 use aya_ebpf::helpers::{bpf_d_path, bpf_get_current_pid_tgid};
 use aya_ebpf::maps::LruHashMap;
-use aya_ebpf::programs::{FEntryContext, LsmContext};
+use aya_ebpf::programs::{FEntryContext, FExitContext, LsmContext};
 use aya_ebpf::EbpfContext;
-use aya_ebpf_macros::{fentry, lsm, map};
+use aya_ebpf_macros::{fentry, fexit, lsm, map};
 
 use os_sanitizer_common::OsSanitizerError::{
     CouldntAccessBuffer, CouldntGetComm, CouldntGetPath, Unreachable,
@@ -128,6 +128,27 @@ unsafe fn try_do_filp_open(ctx: &FEntryContext) -> Result<(), OsSanitizerError> 
     Ok(())
 }
 
+#[fexit(function = "do_filp_open")]
+fn fexit_do_filp_open(ctx: FExitContext) -> i32 {
+    if let Err(e) = unsafe { try_do_filp_open_cleanup(&ctx) } {
+        crate::emit_error(&ctx, e, "do_filp_open_fxit");
+    }
+    0
+}
+
+unsafe fn try_do_filp_open_cleanup(_ctx: &FExitContext) -> Result<(), OsSanitizerError> {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    update_tracking(pid_tgid, PassId::fexit_do_filp_open);
+
+    if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
+        return Ok(());
+    }
+
+    let _ = ORIGINAL_NAME.remove(&pid_tgid);
+
+    Ok(())
+}
+
 #[fentry(function = "may_open")]
 fn fentry_may_open(ctx: FEntryContext) -> i32 {
     if let Err(e) = unsafe { try_may_open(&ctx) } {
@@ -202,11 +223,35 @@ unsafe fn try_open_permissions_file(ctx: &FEntryContext) -> Result<(), OsSanitiz
                     return Ok(()); // nothing to report :(
                 }
 
-                if filename.starts_with(b"/dev") || filename.starts_with(b"/proc") {
+                if filename.starts_with(b"/dev")
+                    || filename.starts_with(b"/proc")
+                    || filename.starts_with(b"/sys")
+                {
                     return Ok(()); // generally not desireable to report
                 }
 
                 let original = read_str(original, "original file requested").ok();
+
+                if let Some(original) = original {
+                    if [
+                        b"/dev/full".as_slice(),
+                        b"/dev/fuse".as_slice(),
+                        b"/dev/kvm".as_slice(),
+                        b"/dev/null".as_slice(),
+                        b"/dev/ptmx".as_slice(),
+                        b"/dev/random".as_slice(),
+                        b"/dev/tty".as_slice(),
+                        b"/dev/urandom".as_slice(),
+                        b"/dev/vhost-net".as_slice(),
+                        b"/dev/vhost-vsock".as_slice(),
+                        b"/dev/zero".as_slice(),
+                    ]
+                    .into_iter()
+                    .any(|d| original.starts_with(d))
+                    {
+                        return Ok(()); // generally not desireable to report
+                    }
+                }
 
                 let uid = ctx.uid();
                 let gid = ctx.gid();

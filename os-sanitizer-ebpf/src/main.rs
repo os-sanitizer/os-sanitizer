@@ -36,7 +36,13 @@ pub(crate) type Hasher = rustc_hash::FxHasher;
 #[link_section = "license"]
 pub static LICENSE: [u8; 4] = *b"GPL\0";
 
-#[allow(improper_ctypes_definitions, nonstandard_style, unnecessary_transmutes, unused, clippy::all)]
+#[allow(
+    improper_ctypes_definitions,
+    nonstandard_style,
+    unnecessary_transmutes,
+    unused,
+    clippy::all
+)]
 mod binding;
 mod do_faccessat;
 mod do_statx;
@@ -67,12 +73,10 @@ pub static FLAGGED_FILE_OPEN_PIDS: LruHashMap<u64, (ToctouVariant, u64)> =
     LruHashMap::with_max_entries(1 << 12, 0);
 
 #[map(name = "FUNCTION_REPORT_QUEUE")]
-pub static FUNCTION_REPORT_QUEUE: PerfEventArray<[u8; SERIALIZED_SIZE]> =
-    PerfEventArray::new(0);
+pub static FUNCTION_REPORT_QUEUE: PerfEventArray<[u8; SERIALIZED_SIZE]> = PerfEventArray::new(0);
 
 #[map(name = "STATS_QUEUE")]
-pub static STATS_QUEUE: PerfEventArray<[u8; SERIALIZED_SIZE]> =
-    PerfEventArray::new(0);
+pub static STATS_QUEUE: PerfEventArray<[u8; SERIALIZED_SIZE]> = PerfEventArray::new(0);
 
 #[map(name = "STACKTRACES")]
 pub static STACK_MAP: StackTrace = StackTrace::with_max_entries(1 << 20, 0);

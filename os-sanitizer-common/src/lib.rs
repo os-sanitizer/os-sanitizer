@@ -38,6 +38,7 @@ pub enum PassId {
     uprobe_memcpy,
     lsm_open_permissions_inode,
     fentry_do_filp_open,
+    fexit_do_filp_open,
     fentry_may_open,
     fentry_open_permissions_file,
     fentry_clear_open_permissions,
