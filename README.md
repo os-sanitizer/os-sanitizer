@@ -1,5 +1,8 @@
 # os-sanitizer
 
+This README is updated with all steps tested on Fedora 42.
+Your mileage may vary.
+
 ## Prerequisites
 
 1. Install clang (you need at least libclang.so) of your choice.
