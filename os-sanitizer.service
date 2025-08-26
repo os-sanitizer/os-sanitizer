@@ -1,0 +1,14 @@
+[Unit]
+Description=OSSanitizer
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=root
+Environment="RUST_LOG=warn"
+ExecStart=/usr/local/sbin/os-sanitizer --gets --sprintf --printf-mutability --access --security-file-open --system-absolute --system-mutability --interceptable-path --filep-unlocked -v 0
+
+[Install]
+WantedBy=basic.target

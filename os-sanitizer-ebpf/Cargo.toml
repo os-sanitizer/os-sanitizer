@@ -1,0 +1,26 @@
+[package]
+name = "os-sanitizer-ebpf"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["anon-struct"]
+
+anon-struct = []
+tracking = []
+
+[build-dependencies]
+which = "8"
+
+[dependencies]
+aya-ebpf = { git = "https://github.com/aya-rs/aya.git" }
+aya-ebpf-macros = { git = "https://github.com/aya-rs/aya.git" }
+aya-log-ebpf = { git = "https://github.com/aya-rs/aya.git" }
+# cannot upgrade due to missing __multi3
+rustc-hash = { version = "1.1", default-features = false }
+os-sanitizer-common = { path = "../os-sanitizer-common" }
+paste = "1.0"
+
+[[bin]]
+name = "os-sanitizer"
+path = "src/main.rs"

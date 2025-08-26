@@ -1,0 +1,15 @@
+[package]
+name = "os-sanitizer-common"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+user = ["aya", "strum_macros"]
+
+[dependencies]
+aya = { git = "https://github.com/aya-rs/aya.git", optional = true }
+strum_macros = { version = "0.27.2", optional = true }
+
+[lib]
+path = "src/lib.rs"

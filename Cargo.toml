@@ -1,0 +1,22 @@
+[workspace]
+members = ["os-sanitizer", "os-sanitizer-common", "os-sanitizer-ebpf", "os-sanitizer-symbolizer"]
+default-members = ["os-sanitizer", "os-sanitizer-common", "os-sanitizer-symbolizer"]
+resolver = "2"
+
+[profile.dev]
+opt-level = 3
+debug = true
+debug-assertions = false
+overflow-checks = false
+lto = true
+panic = "abort"
+incremental = false
+codegen-units = 1
+rpath = false
+
+[profile.release]
+opt-level = 3
+debug = true
+lto = true
+panic = "abort"
+codegen-units = 1
