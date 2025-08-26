@@ -63,6 +63,7 @@ mod strncpy;
 mod sys_openat2;
 mod system_absolute;
 mod system_mutability;
+mod toctou_2005;
 mod vfs_fstatat;
 
 #[map(name = "IGNORED_PIDS")]

@@ -279,6 +279,13 @@ pub enum OsSanitizerReport {
         pid_tgid: u64,
         stats: MaybeOwnedArray<u64, { PassId::__END as usize }>,
     },
+    Toctou2005 {
+        executable: [u8; EXECUTABLE_LEN],
+        pid_tgid: u64,
+        stack_id: u64,
+        second_stack_id: u64,
+        filename: MaybeOwnedArray<u8, USERSTR_LEN>,
+    },
 }
 
 trait SerialisedContent {
@@ -352,6 +359,7 @@ impl OsSanitizerReport {
             OsSanitizerReport::UnsafeOpen { .. } => 14,
             OsSanitizerReport::LeakyVessel { .. } => 15,
             OsSanitizerReport::Statistics { .. } => 16,
+            &OsSanitizerReport::Toctou2005 { .. } => 17,
         }])?;
         let buf = match self {
             OsSanitizerReport::RwxVma {
@@ -442,6 +450,12 @@ impl OsSanitizerReport {
                 ..
             }
             | OsSanitizerReport::LeakyVessel {
+                executable,
+                pid_tgid,
+                stack_id,
+                ..
+            }
+            | OsSanitizerReport::Toctou2005 {
                 executable,
                 pid_tgid,
                 stack_id,
@@ -622,6 +636,14 @@ impl OsSanitizerReport {
                 for stat in stats.iter() {
                     buf = buf.write(&stat.to_be_bytes())?;
                 }
+            }
+            OsSanitizerReport::Toctou2005 {
+                second_stack_id,
+                filename,
+                ..
+            } => {
+                buf.write(&second_stack_id.to_be_bytes())?
+                    .write(filename.as_slice())?;
             }
         }
         Ok(())
@@ -938,6 +960,19 @@ impl TryFrom<&[u8]> for OsSanitizerReport {
                     executable,
                     pid_tgid,
                     stats,
+                }
+            }
+            17 => {
+                let mut second_stack_id = 0;
+                let mut filename = [0u8; USERSTR_LEN];
+                value.read_u64(&mut second_stack_id)?.read(&mut filename)?;
+
+                OsSanitizerReport::Toctou2005 {
+                    executable,
+                    pid_tgid,
+                    stack_id,
+                    second_stack_id,
+                    filename,
                 }
             }
             _ => {

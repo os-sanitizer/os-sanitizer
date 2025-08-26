@@ -274,6 +274,11 @@ struct Args {
     interceptable_path: bool,
     #[arg(
         long,
+        help = "TOCTOUs from: https://webpages.charlotte.edu/jwei8/Jinpeng_Homepage_files/toctou-fast05.pdf"
+    )]
+    toctou_2005: bool,
+    #[arg(
+        long,
         help = "Log potential Leaky Vessel issues; see: https://www.bleepingcomputer.com/news/security/leaky-vessels-flaws-allow-hackers-to-escape-docker-runc-containers Note: not included in option --all"
     )]
     leaky_vessel: bool,
@@ -318,6 +323,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.fixed_mmap = true;
         args.interceptable_path = true;
         args.leaky_vessel = true;
+        args.toctou_2005 = true;
     }
 
     if args.reference_policy {
@@ -354,7 +360,8 @@ async fn main() -> Result<(), anyhow::Error> {
         || args.filep_unlocked
         || args.fixed_mmap
         || args.interceptable_path
-        || args.leaky_vessel)
+        || args.leaky_vessel
+        || args.toctou_2005)
     {
         eprintln!("You must specify one of the modes.");
         <Args as CommandFactory>::command().print_help()?;
@@ -452,6 +459,7 @@ async fn main() -> Result<(), anyhow::Error> {
                                     | OsSanitizerReport::RwxVma { executable, pid_tgid, stack_id, .. }
                                     | OsSanitizerReport::FixedMmap { executable, pid_tgid, stack_id, .. }
                                     | OsSanitizerReport::LeakyVessel { executable, pid_tgid, stack_id, .. }
+                                    | OsSanitizerReport::Toctou2005 { executable, pid_tgid, stack_id, .. }
                                     => {
                                         let Ok(executable) = CStr::from_bytes_until_nul(&executable).unwrap().to_str() else {
                                             warn!("Couldn't recover the name of an executable.");
@@ -758,6 +766,18 @@ async fn main() -> Result<(), anyhow::Error> {
                                         extra_stacktraces.push(stacktrace);
 
                                         (format!("{context} (originally pid: {orig_pid}), {msg}, exec'd after chdir following fork, which may constitute a leaky vessel vulnerability"), level)
+                                    }
+                                    OsSanitizerReport::Toctou2005 { second_stack_id, filename, .. } => {
+                                        let Ok(filename) = CStr::from_bytes_until_nul(filename.as_slice()).map(|s| s.to_string_lossy()) else {
+                                            return;
+                                        };
+                                        let Ok(stacktrace) = stacktraces.get(&(second_stack_id as u32), 0) else {
+                                            warn!("Couldn't recover the stacktrace of the executable {executable}.");
+                                            return;
+                                        };
+                                        extra_stacktraces.push(stacktrace);
+
+                                        (format!("{context} performed a pattern known to induce TOCTOU on the path {filename}"), Level::Warn)
                                     }
                                     OsSanitizerReport::Statistics { .. } => unreachable!("Handled in an earlier branch.")
                                 };
@@ -1121,6 +1141,59 @@ async fn main() -> Result<(), anyhow::Error> {
         attach_fentry!(bpf, btf, "set_fs_pwd", "set_fs_pwd_lv");
         attach_lsm!(bpf, btf, "task_fix_setuid", "setuid_lv");
         attach_tracepoint!(bpf, "fork_lv", ["sched", "sched_process_fork"]);
+    }
+
+    if args.toctou_2005 {
+        attach_tracepoint!(
+            bpf,
+            "sched_enter_creation_arg0",
+            ["syscalls", "sys_enter_creat"],
+            ["syscalls", "sys_enter_open"],
+            ["syscalls", "sys_enter_mknod"],
+            ["syscalls", "sys_enter_mkdir"],
+        );
+        attach_tracepoint!(
+            bpf,
+            "sched_enter_creation_arg1",
+            ["syscalls", "sys_enter_link"],
+            ["syscalls", "sys_enter_symlink"],
+            ["syscalls", "sys_enter_rename"],
+        );
+        attach_tracepoint!(
+            bpf,
+            "sched_enter_remove_arg0",
+            ["syscalls", "sys_enter_rename"],
+            ["syscalls", "sys_enter_rmdir"],
+            ["syscalls", "sys_enter_unlink"],
+        );
+        attach_tracepoint!(
+            bpf,
+            "sched_enter_normal_use_arg0",
+            ["syscalls", "sys_enter_chmod"],
+            ["syscalls", "sys_enter_chown"],
+            ["syscalls", "sys_enter_truncate"],
+            ["syscalls", "sys_enter_utime"],
+            ["syscalls", "sys_enter_chdir"],
+            ["syscalls", "sys_enter_chroot"],
+            ["syscalls", "sys_enter_pivot_root"],
+            ["syscalls", "sys_enter_open"],
+            ["syscalls", "sys_enter_execve"],
+        );
+        attach_tracepoint!(
+            bpf,
+            "sched_enter_normal_use_arg1",
+            ["syscalls", "sys_enter_mount"],
+        );
+        attach_tracepoint!(
+            bpf,
+            "sched_enter_check_arg0",
+            ["syscalls", "sys_enter_access"],
+        );
+        attach_tracepoint!(
+            bpf,
+            "sched_enter_check_arg1",
+            ["syscalls", "sys_enter_statx"],
+        );
     }
 
     attach_tracepoint!(bpf, "sched_exit_stats", ["sched", "sched_process_exit"]);
