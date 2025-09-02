@@ -103,7 +103,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 [[package]]
 name = "aya"
 version = "0.13.1"
-source = "git+https://github.com/aya-rs/aya.git#2869cb884cd9e042c46e5c0c7c3a42c76a7c881e"
+source = "git+https://github.com/aya-rs/aya.git#23cbab571ce49073cd128f2ad79e4dadac536cb3"
 dependencies = [
  "assert_matches",
  "aya-obj",
@@ -120,7 +120,7 @@ dependencies = [
 [[package]]
 name = "aya-build"
 version = "0.1.2"
-source = "git+https://github.com/aya-rs/aya.git#2869cb884cd9e042c46e5c0c7c3a42c76a7c881e"
+source = "git+https://github.com/aya-rs/aya.git#23cbab571ce49073cd128f2ad79e4dadac536cb3"
 dependencies = [
  "anyhow",
  "cargo_metadata",
@@ -129,7 +129,7 @@ dependencies = [
 [[package]]
 name = "aya-ebpf"
 version = "0.1.1"
-source = "git+https://github.com/aya-rs/aya.git#2869cb884cd9e042c46e5c0c7c3a42c76a7c881e"
+source = "git+https://github.com/aya-rs/aya.git#23cbab571ce49073cd128f2ad79e4dadac536cb3"
 dependencies = [
  "aya-ebpf-bindings",
  "aya-ebpf-cty",
@@ -140,7 +140,7 @@ dependencies = [
 [[package]]
 name = "aya-ebpf-bindings"
 version = "0.1.1"
-source = "git+https://github.com/aya-rs/aya.git#2869cb884cd9e042c46e5c0c7c3a42c76a7c881e"
+source = "git+https://github.com/aya-rs/aya.git#23cbab571ce49073cd128f2ad79e4dadac536cb3"
 dependencies = [
  "aya-ebpf-cty",
 ]
@@ -148,12 +148,12 @@ dependencies = [
 [[package]]
 name = "aya-ebpf-cty"
 version = "0.2.2"
-source = "git+https://github.com/aya-rs/aya.git#2869cb884cd9e042c46e5c0c7c3a42c76a7c881e"
+source = "git+https://github.com/aya-rs/aya.git#23cbab571ce49073cd128f2ad79e4dadac536cb3"
 
 [[package]]
 name = "aya-ebpf-macros"
 version = "0.1.1"
-source = "git+https://github.com/aya-rs/aya.git#2869cb884cd9e042c46e5c0c7c3a42c76a7c881e"
+source = "git+https://github.com/aya-rs/aya.git#23cbab571ce49073cd128f2ad79e4dadac536cb3"
 dependencies = [
  "proc-macro2",
  "proc-macro2-diagnostics",
@@ -164,7 +164,7 @@ dependencies = [
 [[package]]
 name = "aya-log"
 version = "0.2.1"
-source = "git+https://github.com/aya-rs/aya.git#2869cb884cd9e042c46e5c0c7c3a42c76a7c881e"
+source = "git+https://github.com/aya-rs/aya.git#23cbab571ce49073cd128f2ad79e4dadac536cb3"
 dependencies = [
  "aya",
  "aya-log-common",
@@ -175,7 +175,7 @@ dependencies = [
 [[package]]
 name = "aya-log-common"
 version = "0.1.15"
-source = "git+https://github.com/aya-rs/aya.git#2869cb884cd9e042c46e5c0c7c3a42c76a7c881e"
+source = "git+https://github.com/aya-rs/aya.git#23cbab571ce49073cd128f2ad79e4dadac536cb3"
 dependencies = [
  "num_enum",
 ]
@@ -183,7 +183,7 @@ dependencies = [
 [[package]]
 name = "aya-log-ebpf"
 version = "0.1.1"
-source = "git+https://github.com/aya-rs/aya.git#2869cb884cd9e042c46e5c0c7c3a42c76a7c881e"
+source = "git+https://github.com/aya-rs/aya.git#23cbab571ce49073cd128f2ad79e4dadac536cb3"
 dependencies = [
  "aya-ebpf",
  "aya-log-common",
@@ -193,7 +193,7 @@ dependencies = [
 [[package]]
 name = "aya-log-ebpf-macros"
 version = "0.1.0"
-source = "git+https://github.com/aya-rs/aya.git#2869cb884cd9e042c46e5c0c7c3a42c76a7c881e"
+source = "git+https://github.com/aya-rs/aya.git#23cbab571ce49073cd128f2ad79e4dadac536cb3"
 dependencies = [
  "aya-log-common",
  "aya-log-parser",
@@ -205,7 +205,7 @@ dependencies = [
 [[package]]
 name = "aya-log-parser"
 version = "0.1.13"
-source = "git+https://github.com/aya-rs/aya.git#2869cb884cd9e042c46e5c0c7c3a42c76a7c881e"
+source = "git+https://github.com/aya-rs/aya.git#23cbab571ce49073cd128f2ad79e4dadac536cb3"
 dependencies = [
  "aya-log-common",
 ]
@@ -213,7 +213,7 @@ dependencies = [
 [[package]]
 name = "aya-obj"
 version = "0.2.1"
-source = "git+https://github.com/aya-rs/aya.git#2869cb884cd9e042c46e5c0c7c3a42c76a7c881e"
+source = "git+https://github.com/aya-rs/aya.git#23cbab571ce49073cd128f2ad79e4dadac536cb3"
 dependencies = [
  "bytes",
  "hashbrown",
@@ -239,9 +239,9 @@ dependencies = [
 
 [[package]]
 name = "bitflags"
-version = "2.9.2"
+version = "2.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a65b545ab31d687cff52899d4890855fec459eb6afe0da6417b8a18da87aa29"
+checksum = "2261d10cca569e4643e526d8dc2e62e433cc8aba21ab764233731f8d369bf394"
 
 [[package]]
 name = "bytes"
@@ -251,9 +251,9 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
 name = "camino"
-version = "1.1.11"
+version = "1.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d07aa9a93b00c76f71bc35d598bed923f6d4f3a9ca5c24b7737ae1a292841c0"
+checksum = "dd0b03af37dad7a14518b7691d81acb0f8222604ad3d1b02f6b4bed5188c0cd5"
 dependencies = [
  "serde",
 ]
@@ -300,15 +300,15 @@ dependencies = [
 
 [[package]]
 name = "cfg-if"
-version = "1.0.1"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9555578bc9e57714c812a1f84e4fc5b4d21fcb063490c624de019f7464c91268"
+checksum = "2fd1289c04a9ea8cb22300a459a72a385d7c73d3259e2ed7dcb2af674838cfa9"
 
 [[package]]
 name = "clap"
-version = "4.5.45"
+version = "4.5.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fc0e74a703892159f5ae7d3aac52c8e6c392f5ae5f359c70b5881d60aaac318"
+checksum = "2c5e4fcf9c21d2e544ca1ee9d8552de13019a42aa7dbf32747fa7aaf1df76e57"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -316,9 +316,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.44"
+version = "4.5.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3e7f4214277f3c7aa526a59dd3fbe306a370daee1f8b7b8c987069cd8e888a8"
+checksum = "fecb53a0e6fcfb055f686001bc2e2592fa527efaf38dbe81a6a9563562e57d41"
 dependencies = [
  "anstream",
  "anstyle",
@@ -448,9 +448,9 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.1"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13624c2627564efccf4934284bdd98cbaa14e79b0b5a141218e507b3a823456"
+checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
 ]
@@ -566,9 +566,9 @@ dependencies = [
 
 [[package]]
 name = "idna"
-version = "1.0.3"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "686f825264d630750a544639377bae737628043f20d38bbc029e8f29ea968a7e"
+checksum = "3b0875f23caa03898994f6ddc501886a45c7d3d62d04d2d90788d47be1b1e4de"
 dependencies = [
  "idna_adapter",
  "smallvec",
@@ -587,9 +587,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.10.0"
+version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe4cd85333e22411419a0bcae1297d25e58c9443848b11dc6a86fefe8c78a661"
+checksum = "f2481980430f9f78649238835720ddccc57e52df14ffce1c6f37391d61b563e9"
 dependencies = [
  "equivalent",
  "hashbrown",
@@ -597,9 +597,9 @@ dependencies = [
 
 [[package]]
 name = "io-uring"
-version = "0.7.9"
+version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d93587f37623a1a17d94ef2bc9ada592f5465fe7732084ab7beefabe5c77c0c4"
+checksum = "046fa2d4d00aea763528b4950358d0ead425372445dc8ff86312b3c69ff7727b"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -828,9 +828,9 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "percent-encoding"
-version = "2.3.1"
+version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
+checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pin-project-lite"
@@ -855,9 +855,9 @@ dependencies = [
 
 [[package]]
 name = "potential_utf"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5a7c30837279ca13e7c867e9e40053bc68740f988cb07f7ca6df43cc734b585"
+checksum = "84df19adbe5b5a0782edcab45899906947ab039ccf4573713735ee7de1e6b08a"
 dependencies = [
  "zerovec",
 ]
@@ -894,9 +894,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.11.1"
+version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b544ef1b4eac5dc2db33ea63606ae9ffcfac26c1416a2806ae0bf5f56b201191"
+checksum = "23d7fd106d8c02486a8d64e778353d1cffe08ce79ac2e82f540c86d0facf6912"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -906,9 +906,9 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.9"
+version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "809e8dc61f6de73b46c85f4c96486310fe304c434cfa43669d7b40f711150908"
+checksum = "6b9458fa0bfeeac22b5ca447c63aaf45f28439a709ccd244698632f9aa6394d6"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -917,9 +917,9 @@ dependencies = [
 
 [[package]]
 name = "regex-syntax"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
+checksum = "caf4aa5b0f434c91fe5c7f1ecb6a5ece2130b02ad2a590589dda5146df959001"
 
 [[package]]
 name = "rustc-demangle"
@@ -1108,18 +1108,18 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.15"
+version = "2.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80d76d3f064b981389ecb4b6b7f45a0bf9fdac1d5b9204c7bd6714fecc302850"
+checksum = "3467d614147380f2e4e374161426ff399c91084acd2363eaf549172b3d5e60c0"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.15"
+version = "2.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44d29feb33e986b6ea906bd9c3559a856983f92371b3eaa5e83782a351623de0"
+checksum = "6c5e1be1c48b9172ee610da68fd9cd2770e7a4056cb3fc98710ee6906f0c7960"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1227,13 +1227,14 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 
 [[package]]
 name = "url"
-version = "2.5.4"
+version = "2.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32f8b686cadd1473f4bd0117a5d28d36b1ade384ea9b5069a1c40aefed7fda60"
+checksum = "08bc136a29a3d1758e07a9cca267be308aeebf5cfd5a10f3f67ab2097683ef5b"
 dependencies = [
  "form_urlencoded",
  "idna",
  "percent-encoding",
+ "serde",
 ]
 
 [[package]]
@@ -1436,9 +1437,9 @@ checksum = "271414315aff87387382ec3d271b52d7ae78726f5d44ac98b4f4030c91880486"
 
 [[package]]
 name = "winnow"
-version = "0.7.12"
+version = "0.7.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3edebf492c8125044983378ecb5766203ad3b4c2f7a922bd7dd207f6d443e95"
+checksum = "21a0236b59786fed61e2a80582dd500fe61f18b5dca67a4a067d0bc9039339cf"
 dependencies = [
  "memchr",
 ]
