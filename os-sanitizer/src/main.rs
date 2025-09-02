@@ -63,7 +63,7 @@ macro_rules! attach_fexit {
     };
 
     ($bpf: expr, $btf: expr, $name: literal) => {
-        attach_fentry!($bpf, $btf, $name, $name)
+        attach_fexit!($bpf, $btf, $name, $name)
     };
 }
 
