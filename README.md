@@ -3,6 +3,9 @@
 This README is updated with all steps tested on Fedora 42.
 Your mileage may vary.
 
+**Important note regarding artifact status:** A minor bug fix was applied to be compatible with recent aya versions.
+The original artifact as submitted without _any_ fixes is present in the [usenix-submission tag](https://github.com/os-sanitizer/os-sanitizer/releases/tag/usenix-submission).
+
 ## Prerequisites
 
 1. Install clang (you need at least libclang.so) of your choice.
