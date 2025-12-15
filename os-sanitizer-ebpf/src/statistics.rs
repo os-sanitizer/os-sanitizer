@@ -4,19 +4,22 @@
 
 use crate::{REPORT_SCRATCH, STATS_QUEUE};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
-use aya_ebpf::maps::LruHashMap;
+use aya_ebpf::maps::{Array, LruHashMap};
 use aya_ebpf::programs::TracePointContext;
 use aya_ebpf_macros::{map, tracepoint};
 use os_sanitizer_common::OsSanitizerError::{CouldntAccessBuffer, SerialisationError};
-use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, PassId};
+use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, ProgId};
 
 #[map]
-static STATISTICS: LruHashMap<u64, [u64; PassId::__END as usize]> =
+static STATISTICS: LruHashMap<u64, [u64; ProgId::__END as usize]> =
     LruHashMap::with_max_entries(1 << 16, 0);
+
+#[map]
+static GLOBAL_STATISTICS: Array<u64> = Array::with_max_entries(ProgId::__END as u32, 0);
 
 // relieve some stack pressure
 #[cfg(feature = "tracking")]
-static DEFAULT_STATISTICS: [u64; variant_count::<PassId>()] = [0; variant_count::<PassId>()];
+static DEFAULT_STATISTICS: [u64; ProgId::__END as usize] = [0; ProgId::__END as usize];
 
 #[tracepoint]
 fn tracepoint_sched_exit_stats(probe: TracePointContext) -> u32 {
@@ -64,7 +67,7 @@ unsafe fn try_tracepoint_sched_exit_stats(
 
 #[cfg(feature = "tracking")]
 #[inline(always)]
-pub fn update_tracking(pid_tgid: u64, id: PassId) {
+pub fn update_tracking(pid_tgid: u64, id: ProgId) {
     unsafe {
         let statistics = if let Some(existing) = STATISTICS.get_ptr_mut(&pid_tgid) {
             &mut *existing
@@ -82,8 +85,29 @@ pub fn update_tracking(pid_tgid: u64, id: PassId) {
         };
         // this will not race on this entry as each pid_tgid can only be in one bpf program
         statistics[id as usize] += 1;
+
+        // this _might_ race; use atomics
+        if let Some(ptr) = GLOBAL_STATISTICS.get_ptr_mut(id as u32)
+            && let Some(ptr) = core::ptr::NonNull::new(ptr)
+        {
+            use core::intrinsics::{AtomicOrdering, atomic_cxchg};
+            const TRIES: usize = 16;
+
+            let mut i = 0;
+            let mut old = ptr.read(); // no atomic load, rely on cxchg to save us
+            while let (actual, false) = atomic_cxchg::<
+                _,
+                { AtomicOrdering::SeqCst },
+                { AtomicOrdering::Acquire },
+            >(ptr.as_ptr(), old, old + 1)
+                && i < TRIES
+            {
+                old = actual;
+                i += 1;
+            }
+        }
     }
 }
 #[cfg(not(feature = "tracking"))]
 #[inline(always)]
-pub fn update_tracking(_pid_tgid: u64, _id: PassId) {}
+pub fn update_tracking(_pid_tgid: u64, _id: ProgId) {}

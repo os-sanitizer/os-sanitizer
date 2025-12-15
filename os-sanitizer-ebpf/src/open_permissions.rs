@@ -16,7 +16,7 @@ use os_sanitizer_common::OsSanitizerError::{
     CouldntAccessBuffer, CouldntGetComm, CouldntGetPath, Unreachable,
 };
 use os_sanitizer_common::OsSanitizerReport::UnsafeOpen;
-use os_sanitizer_common::{OsSanitizerError, PassId, EXECUTABLE_LEN};
+use os_sanitizer_common::{OsSanitizerError, ProgId, EXECUTABLE_LEN};
 
 use crate::binding::{file, filename, inode};
 use crate::statistics::update_tracking;
@@ -40,7 +40,7 @@ fn lsm_open_permissions_inode(ctx: LsmContext) -> i32 {
 
 unsafe fn try_open_permissions_inode(ctx: &LsmContext) -> Result<(), OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::lsm_open_permissions_inode);
+    update_tracking(pid_tgid, ProgId::lsm_open_permissions_inode);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(());
@@ -112,7 +112,7 @@ fn fentry_do_filp_open(ctx: FEntryContext) -> i32 {
 
 unsafe fn try_do_filp_open(ctx: &FEntryContext) -> Result<(), OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::fentry_do_filp_open);
+    update_tracking(pid_tgid, ProgId::fentry_do_filp_open);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(());
@@ -138,7 +138,7 @@ fn fexit_do_filp_open(ctx: FExitContext) -> i32 {
 
 unsafe fn try_do_filp_open_cleanup(_ctx: &FExitContext) -> Result<(), OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::fexit_do_filp_open);
+    update_tracking(pid_tgid, ProgId::fexit_do_filp_open);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(());
@@ -159,7 +159,7 @@ fn fentry_may_open(ctx: FEntryContext) -> i32 {
 
 unsafe fn try_may_open(ctx: &FEntryContext) -> Result<(), OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::fentry_may_open);
+    update_tracking(pid_tgid, ProgId::fentry_may_open);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(());
@@ -184,7 +184,7 @@ fn fentry_open_permissions_file(ctx: FEntryContext) -> i32 {
 
 unsafe fn try_open_permissions_file(ctx: &FEntryContext) -> Result<(), OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::fentry_open_permissions_file);
+    update_tracking(pid_tgid, ProgId::fentry_open_permissions_file);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(());
@@ -292,7 +292,7 @@ unsafe fn try_open_permissions_file(ctx: &FEntryContext) -> Result<(), OsSanitiz
 #[fentry(function = "path_openat")]
 fn fentry_clear_open_permissions(_ctx: FEntryContext) -> i32 {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::fentry_clear_open_permissions);
+    update_tracking(pid_tgid, ProgId::fentry_clear_open_permissions);
 
     // discard the accumulated perms
     let _ = PERMISSION_INODE_RECORD.remove(&pid_tgid);

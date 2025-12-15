@@ -10,7 +10,7 @@ use aya_ebpf::programs::FEntryContext;
 use aya_ebpf_macros::fentry;
 
 use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, UnexpectedNull};
-use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, PassId, EXECUTABLE_LEN};
+use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, ProgId, EXECUTABLE_LEN};
 
 use crate::binding::vm_area_struct;
 use crate::statistics::update_tracking;
@@ -27,7 +27,7 @@ fn fentry_vma_set_page_prot(probe: FEntryContext) -> u32 {
 #[inline(always)]
 unsafe fn try_fentry_vma_set_page_prot(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::fentry_vma_set_page_prot);
+    update_tracking(pid_tgid, ProgId::fentry_vma_set_page_prot);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(0);

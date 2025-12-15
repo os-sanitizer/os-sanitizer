@@ -9,7 +9,7 @@ use aya_ebpf::programs::{ProbeContext, RetProbeContext};
 use aya_ebpf_macros::{map, uprobe, uretprobe};
 
 use os_sanitizer_common::OsSanitizerError::{OutOfSpace, Unreachable};
-use os_sanitizer_common::{OsSanitizerError, PassId};
+use os_sanitizer_common::{OsSanitizerError, ProgId};
 
 use crate::statistics::update_tracking;
 use crate::IGNORED_PIDS;
@@ -32,7 +32,7 @@ fn uprobe_strlen(probe: ProbeContext) -> u32 {
 #[inline(always)]
 unsafe fn try_uprobe_strlen(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::uprobe_strlen);
+    update_tracking(pid_tgid, ProgId::uprobe_strlen);
 
     let strptr: uintptr_t = probe
         .arg(0)
@@ -62,7 +62,7 @@ fn uretprobe_strlen(probe: RetProbeContext) -> u32 {
 #[inline(always)]
 unsafe fn try_uretprobe_strlen(probe: &RetProbeContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::uretprobe_strlen);
+    update_tracking(pid_tgid, ProgId::uretprobe_strlen);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(0);

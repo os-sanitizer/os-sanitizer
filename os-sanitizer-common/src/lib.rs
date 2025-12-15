@@ -21,9 +21,9 @@ pub type MaybeOwnedArray<T, const N: usize> = [T; N];
 
 #[allow(non_camel_case_types)]
 #[repr(usize)]
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 #[cfg_attr(feature = "user", derive(strum_macros::FromRepr))]
-pub enum PassId {
+pub enum ProgId {
     fentry_do_faccessat = 0,
     fentry_do_statx,
     uprobe_fclose_unlocked,
@@ -277,7 +277,7 @@ pub enum OsSanitizerReport {
     Statistics {
         executable: [u8; EXECUTABLE_LEN],
         pid_tgid: u64,
-        stats: MaybeOwnedArray<u64, { PassId::__END as usize }>,
+        stats: MaybeOwnedArray<u64, { ProgId::__END as usize }>,
     },
     Toctou2005 {
         executable: [u8; EXECUTABLE_LEN],
@@ -286,6 +286,47 @@ pub enum OsSanitizerReport {
         second_stack_id: u64,
         filename: MaybeOwnedArray<u8, USERSTR_LEN>,
     },
+}
+
+impl OsSanitizerReport {
+    pub fn pass(&self) -> &'static str {
+        match self {
+            OsSanitizerReport::RwxVma { .. } => "rwx_mem",
+            OsSanitizerReport::PrintfMutability { .. } => "printf_mut",
+            OsSanitizerReport::SystemMutability { .. } => "system_mut",
+            OsSanitizerReport::SystemAbsolute { .. } => "system_abs",
+            OsSanitizerReport::FilePointerLocking { .. } => "filep_unlocked",
+            OsSanitizerReport::Sprintf { .. } => "sprintf",
+            OsSanitizerReport::Snprintf { .. } => "snprintf",
+            OsSanitizerReport::Strcpy { .. } => "strcpy",
+            OsSanitizerReport::Strncpy { .. } => "strncpy",
+            OsSanitizerReport::Memcpy { .. } => "memcpy",
+            OsSanitizerReport::Open {
+                variant: OpenViolation::Perms,
+                ..
+            } => "sec_file_open",
+            OsSanitizerReport::Open {
+                variant: OpenViolation::Toctou(_, _),
+                ..
+            } => "access",
+            OsSanitizerReport::UnsafeOpen { .. } => "intercept_path",
+            // this won't actually happen because it is currently disabled
+            OsSanitizerReport::Access { .. } => {
+                unimplemented!("The access syscall notification should not be enabled")
+            }
+            OsSanitizerReport::Gets { .. } => "gets",
+            OsSanitizerReport::FixedMmap { .. } => "fixed_mmap",
+            OsSanitizerReport::LeakyVessel { .. } => "leaky_vessel",
+            // we don't collect statistics on statistics
+            OsSanitizerReport::Statistics { .. } => {
+                unimplemented!("Statistics collection is not a pass and should not be queried")
+            }
+            // not tracked; statistics not collected for reproduction case study
+            OsSanitizerReport::Toctou2005 { .. } => unimplemented!(
+                "The TOCTOU reproduction study does not support statistics collection"
+            ),
+        }
+    }
 }
 
 trait SerialisedContent {
@@ -951,7 +992,7 @@ impl TryFrom<&[u8]> for OsSanitizerReport {
                 }
             }
             16 => {
-                let mut stats = [0u64; PassId::__END as usize];
+                let mut stats = [0u64; ProgId::__END as usize];
                 for stat in stats.iter_mut() {
                     value = value.read_u64(stat)?;
                 }

@@ -10,7 +10,7 @@ use aya_ebpf::programs::{ProbeContext, RetProbeContext};
 use aya_ebpf_macros::{map, uprobe, uretprobe};
 
 use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, Unreachable};
-use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, PassId, EXECUTABLE_LEN};
+use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, ProgId, EXECUTABLE_LEN};
 
 use crate::statistics::update_tracking;
 use crate::{emit_report, IGNORED_PIDS};
@@ -21,7 +21,7 @@ static STRNCPY_SAFE_WRAPPED: LruHashMap<u64, u8> = LruHashMap::with_max_entries(
 #[uprobe]
 fn uprobe_strncpy_safe_wrapper(probe: ProbeContext) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::uprobe_strncpy_safe_wrapper);
+    update_tracking(pid_tgid, ProgId::uprobe_strncpy_safe_wrapper);
 
     match STRNCPY_SAFE_WRAPPED.insert(&pid_tgid, &0, 0) {
         Ok(_) => 0,
@@ -36,7 +36,7 @@ fn uprobe_strncpy_safe_wrapper(probe: ProbeContext) -> u32 {
 #[uretprobe]
 fn uretprobe_strncpy_safe_wrapper(_probe: RetProbeContext) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::uretprobe_strncpy_safe_wrapper);
+    update_tracking(pid_tgid, ProgId::uretprobe_strncpy_safe_wrapper);
 
     let _ = STRNCPY_SAFE_WRAPPED.remove(&pid_tgid); // don't care if this fails
     0
@@ -53,7 +53,7 @@ fn uprobe_strncpy(probe: ProbeContext) -> u32 {
 #[inline(always)]
 unsafe fn try_uprobe_strncpy(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::uprobe_strncpy);
+    update_tracking(pid_tgid, ProgId::uprobe_strncpy);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(0);

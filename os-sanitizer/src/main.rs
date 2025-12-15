@@ -2,41 +2,41 @@
 //
 // See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
 
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::process::Stdio;
-use std::time::Duration;
-use std::{
-    ffi::{c_char, CStr},
-    process::exit,
-    sync::Arc,
-};
-
 use aya::maps::PerfEventArray;
 use aya::{
-    maps::{HashMap as AyaHashMap, StackTraceMap},
-    util::online_cpus,
     Btf,
+    maps::{Array as AyaArray, HashMap as AyaHashMap, StackTraceMap},
+    util::online_cpus,
 };
 use aya_log::EbpfLogger;
 use bytes::BytesMut;
 use clap::{CommandFactory, Parser};
 use cpp_demangle::DemangleOptions;
 use either::Either;
-use libc::{pid_t, PROT_EXEC};
-use log::{debug, log, warn, Level};
+use libc::{PROT_EXEC, pid_t};
+use log::{Level, debug, log, warn};
 use once_cell::sync::Lazy;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::process::Stdio;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+use std::{
+    ffi::{CStr, c_char},
+    process::exit,
+    sync::Arc,
+};
 use tokio::io::unix::AsyncFd;
 use tokio::process::Command;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio::{signal, task};
 use users::{get_group_by_gid, get_user_by_uid};
 
 use os_sanitizer_common::{
-    CopyViolation, FixedMmapViolation, OpenViolation, OsSanitizerReport, PassId, SnprintfViolation,
-    SERIALIZED_SIZE,
+    CopyViolation, FixedMmapViolation, OpenViolation, OsSanitizerReport, ProgId, SERIALIZED_SIZE,
+    SnprintfViolation,
 };
 
 use crate::resolver::{ProcMap, ProcMapOffsetResolver};
@@ -414,12 +414,134 @@ async fn main() -> Result<(), anyhow::Error> {
         HashMap::<u32, (Arc<ProcMap>, JoinHandle<()>)>::new(),
     ));
 
+    let counters_map: Arc<HashMap<&str, (&[ProgId], [AtomicUsize; 5])>> =
+        Arc::new(HashMap::from([
+            (
+                "access",
+                (
+                    &[
+                        ProgId::fentry_do_faccessat,
+                        ProgId::fentry_vfs_fstatat,
+                        ProgId::fentry_do_statx,
+                        ProgId::fentry_do_sys_openat2,
+                    ][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+            (
+                "fixed_mmap",
+                (
+                    &[ProgId::fentry_fixed_mmap][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+            (
+                "rwx_mem",
+                (
+                    &[ProgId::fentry_vma_set_page_prot][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+            (
+                "filep_unlocked",
+                (
+                    &[ProgId::check_filep_usage][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+            (
+                "gets",
+                (
+                    &[ProgId::uprobe_gets][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+            (
+                "snprintf",
+                (
+                    &[ProgId::uprobe_snprintf][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+            (
+                "printf_mut",
+                (
+                    &[ProgId::check_printf_mutability][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+            (
+                "system_mut",
+                (
+                    &[ProgId::check_system_mutability][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+            (
+                "system_abs",
+                (
+                    &[ProgId::check_system_absolute][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+            (
+                "sec_file_open",
+                (
+                    &[ProgId::fentry_security_file_open][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+            (
+                "intercept_path",
+                (
+                    &[ProgId::fentry_do_filp_open][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+            (
+                "memcpy",
+                (
+                    &[ProgId::uprobe_memcpy][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+            (
+                "strcpy",
+                (
+                    &[ProgId::uprobe_strcpy][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+            (
+                "strncpy",
+                (
+                    &[ProgId::uprobe_strncpy][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+            (
+                "sprintf",
+                (
+                    &[ProgId::uprobe_sprintf][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+            (
+                "leaky_vessel",
+                (
+                    &[ProgId::uprobe_sprintf][..],
+                    [const { AtomicUsize::new(0) }; 5],
+                ),
+            ),
+        ]));
+
     for cpu_id in online_cpus().map_err(|(_, e)| e)? {
         for source in [&mut reports, &mut stats] {
             let mut buf = AsyncFd::new(source.open(cpu_id, None)?)?;
             {
                 let stacktraces = stacktraces.clone();
                 let cached_procmaps = cached_procmaps.clone();
+                let counters_map = counters_map.clone();
                 let mut rx = tx.subscribe();
                 tasks.push(task::spawn(async move {
                     let mut buffers = (0..32)
@@ -441,6 +563,7 @@ async fn main() -> Result<(), anyhow::Error> {
                             };
                             let stacktraces = stacktraces.clone();
                             let cached_procmaps = cached_procmaps.clone();
+                            let counters_map = counters_map.clone();
                             task::spawn(async move {
                                 let (executable, pid, thread, stacktrace) = match report {
                                     OsSanitizerReport::PrintfMutability { executable, pid_tgid, stack_id, .. }
@@ -486,7 +609,7 @@ async fn main() -> Result<(), anyhow::Error> {
                                             format!("{executable} (pid: {pid}, thread: {thread})")
                                         };
 
-                                        let entries = stats.into_iter().enumerate().filter(|&(_, e)| e != 0).map(|(id, e)| (PassId::from_repr(id).expect("invalid pass id"), e))
+                                        let entries = stats.into_iter().enumerate().filter(|&(_, e)| e != 0).map(|(id, e)| (ProgId::from_repr(id).expect("invalid pass id"), e))
                                             .map(|(id, e)| format!("\n  {id:?} observed {e} times")).collect::<Vec<_>>().join("");
 
                                         debug!("{context} terminated with the following statistics:{entries}");
@@ -526,6 +649,7 @@ async fn main() -> Result<(), anyhow::Error> {
                                     format!("{executable} (pid: {pid}, thread: {thread})")
                                 };
 
+                                let pass = report.pass();
                                 let (message, level) = match report {
                                     OsSanitizerReport::PrintfMutability { template_param, template, .. } => {
                                         if let Ok(template) = unsafe {
@@ -837,6 +961,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
                                 let stacktrace = stacktrace.join("\n");
                                 log!(level, "{message}; stacktrace:{stacktrace}");
+                                let (_, counters) = &counters_map[pass];
+                                counters[level as usize - 1].fetch_add(1, Ordering::SeqCst);
                             });
                         }
                     }
@@ -1203,6 +1329,24 @@ async fn main() -> Result<(), anyhow::Error> {
 
     for task in tasks {
         task.await?;
+    }
+
+    let global_statistics: AyaArray<_, u64> =
+        AyaArray::try_from(bpf.take_map("GLOBAL_STATISTICS").unwrap())?;
+
+    println!("Pass,ERROR,WARN,INFO,DEBUG,TRACE,Observations");
+    for (pass, (repr, counts)) in &*counters_map {
+        println!(
+            "{pass},{},{}",
+            counts
+                .iter()
+                .map(|count| format!("{}", count.load(Ordering::Acquire)))
+                .collect::<Vec<_>>()
+                .join(","),
+            repr.iter()
+                .map(|idx| { global_statistics.get(&(*idx as u32), 0).unwrap() })
+                .sum::<u64>()
+        );
     }
 
     Ok(())

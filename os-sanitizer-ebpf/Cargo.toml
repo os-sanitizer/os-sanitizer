@@ -1,10 +1,10 @@
 [package]
 name = "os-sanitizer-ebpf"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 
 [features]
-default = ["anon-struct"]
+default = ["anon-struct", "tracking"]
 
 anon-struct = []
 tracking = []
@@ -24,3 +24,7 @@ paste = "1.0"
 [[bin]]
 name = "os-sanitizer"
 path = "src/main.rs"
+
+[lints.rust]
+internal_features = "allow"
+unsafe_op_in_unsafe_fn = "allow"

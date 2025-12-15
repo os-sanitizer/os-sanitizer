@@ -2,12 +2,11 @@
 //
 // See LICENSE at the root of this repository (or a legal translation in LICENSE-translations).
 
+#![feature(core_intrinsics)]
 #![no_std]
 #![no_main]
 
-use core::ffi::c_ulong;
-use core::hint::unreachable_unchecked;
-
+use aya_ebpf::EbpfContext;
 use aya_ebpf::bindings::{BPF_F_REUSE_STACKID, BPF_F_USER_STACK};
 use aya_ebpf::cty::{c_void, size_t, uintptr_t};
 use aya_ebpf::helpers::bpf_get_current_pid_tgid;
@@ -16,15 +15,17 @@ use aya_ebpf::macros::map;
 use aya_ebpf::macros::uprobe;
 use aya_ebpf::maps::{HashMap, LruHashMap, PerCpuArray, PerfEventArray, StackTrace};
 use aya_ebpf::programs::ProbeContext;
-use aya_ebpf::{memset, EbpfContext};
 use aya_log_ebpf::{debug, error, info, warn};
+use core::ffi::c_ulong;
+use core::hint::unreachable_unchecked;
+use core::ptr::write_bytes;
 
 use os_sanitizer_common::CopyViolation::Strlen;
 use os_sanitizer_common::OsSanitizerError::*;
-use os_sanitizer_common::PassId;
+use os_sanitizer_common::ProgId;
 use os_sanitizer_common::{
-    CopyViolation, MaybeOwnedArray, OsSanitizerError, OsSanitizerReport, ToctouVariant,
-    EXECUTABLE_LEN, SERIALIZED_SIZE, USERSTR_LEN,
+    CopyViolation, EXECUTABLE_LEN, MaybeOwnedArray, OsSanitizerError, OsSanitizerReport,
+    SERIALIZED_SIZE, ToctouVariant, USERSTR_LEN,
 };
 
 use crate::binding::vm_area_struct;
@@ -33,7 +34,7 @@ use crate::strlen::STRLEN_MAP;
 
 pub(crate) type Hasher = rustc_hash::FxHasher;
 
-#[link_section = "license"]
+#[unsafe(link_section = "license")]
 pub static LICENSE: [u8; 4] = *b"GPL\0";
 
 #[allow(
@@ -221,7 +222,7 @@ pub(crate) unsafe fn read_str(
         .get_ptr_mut(0)
         .ok_or(CouldntAccessBuffer("emit-report"))?;
     let buf = &mut *ptr;
-    memset(buf.as_mut_ptr(), 0, buf.len());
+    write_bytes(buf.as_mut_ptr(), 0, buf.len());
     let mut res = -1;
     for _ in 0..32 {
         res = bpf_probe_read_user_str(
@@ -275,7 +276,7 @@ macro_rules! always_bad_call {
                 if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
                     return Ok(0);
                 }
-                update_tracking(pid_tgid, PassId::[< uprobe_ $name >]);
+                update_tracking(pid_tgid, ProgId::[< uprobe_ $name >]);
 
                 let stack_id = STACK_MAP
                     .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)

@@ -2,7 +2,7 @@
 name = "os-sanitizer"
 description = "A full-system sanitizer for detecting runtime vulnerabilities system-wide."
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 publish = false
 
 [build-dependencies]

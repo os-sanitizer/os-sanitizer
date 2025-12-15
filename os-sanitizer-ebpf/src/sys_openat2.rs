@@ -11,7 +11,7 @@ use aya_ebpf::programs::FEntryContext;
 use aya_ebpf_macros::fentry;
 
 use os_sanitizer_common::OsSanitizerError::Unreachable;
-use os_sanitizer_common::{OsSanitizerError, PassId};
+use os_sanitizer_common::{OsSanitizerError, ProgId};
 
 use crate::statistics::update_tracking;
 use crate::{read_str, ACCESS_MAP, FLAGGED_FILE_OPEN_PIDS, IGNORED_PIDS};
@@ -27,7 +27,7 @@ fn fentry_do_sys_openat2(probe: FEntryContext) -> u32 {
 #[inline(always)]
 unsafe fn try_fentry_do_sys_openat2(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::fentry_do_sys_openat2);
+    update_tracking(pid_tgid, ProgId::fentry_do_sys_openat2);
 
     // we are opening another file; clear the last entry (still exists if the last open failed)
     let _ = FLAGGED_FILE_OPEN_PIDS.remove(&pid_tgid);

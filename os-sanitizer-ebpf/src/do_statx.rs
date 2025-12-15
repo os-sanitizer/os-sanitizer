@@ -12,7 +12,7 @@ use aya_ebpf_macros::fentry;
 
 use os_sanitizer_common::OsSanitizerError::Unreachable;
 use os_sanitizer_common::ToctouVariant::Statx;
-use os_sanitizer_common::{OsSanitizerError, PassId};
+use os_sanitizer_common::{OsSanitizerError, ProgId};
 
 use crate::binding::filename;
 use crate::statistics::update_tracking;
@@ -29,7 +29,7 @@ fn fentry_do_statx(probe: FEntryContext) -> u32 {
 #[inline(always)]
 unsafe fn try_fentry_do_statx(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::fentry_do_statx);
+    update_tracking(pid_tgid, ProgId::fentry_do_statx);
 
     let dfd: c_int = ctx.arg(0);
 

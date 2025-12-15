@@ -11,7 +11,7 @@ use aya_ebpf_macros::{fentry, lsm, map, tracepoint};
 
 use crate::statistics::update_tracking;
 use os_sanitizer_common::OsSanitizerError::CouldntGetComm;
-use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, PassId, EXECUTABLE_LEN};
+use os_sanitizer_common::{OsSanitizerError, OsSanitizerReport, ProgId, EXECUTABLE_LEN};
 
 #[map]
 pub static FORK_CHDIR: LruHashMap<u32, (u32, u32, u64, u64)> =
@@ -30,7 +30,7 @@ fn tracepoint_execveat_lv(ctx: TracePointContext) -> u32 {
 
 unsafe fn try_tracepoint_execveat_lv(ctx: &TracePointContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::tracepoint_execveat_lv);
+    update_tracking(pid_tgid, ProgId::tracepoint_execveat_lv);
     if let Some(&(orig_pid, orig_uid, chdir_stack, setuid_stack)) =
         FORK_CHDIR.get(&(pid_tgid as u32))
     {
@@ -71,7 +71,7 @@ fn fentry_set_fs_pwd_lv(ctx: FEntryContext) -> u32 {
 
 unsafe fn try_fentry_set_fs_pwd_lv(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::fentry_set_fs_pwd_lv);
+    update_tracking(pid_tgid, ProgId::fentry_set_fs_pwd_lv);
 
     let pid = (pid_tgid >> 32) as u32;
     if let Some(&(old_pid, old_uid, setuid)) = FORK_OBSERVED.get(&pid) {
@@ -96,7 +96,7 @@ fn lsm_setuid_lv(ctx: LsmContext) -> i32 {
 
 unsafe fn try_lsm_setuid_lv(ctx: &LsmContext) -> Result<(), OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::lsm_setuid_lv);
+    update_tracking(pid_tgid, ProgId::lsm_setuid_lv);
 
     let pid = (pid_tgid >> 32) as u32;
     if let Some(&(orig_pid, uid, setuid)) = FORK_OBSERVED.get(&pid) {
@@ -133,7 +133,7 @@ unsafe fn try_tracepoint_fork_lv(probe: &TracePointContext) -> Result<u32, OsSan
     let uid = bpf_get_current_uid_gid() as u32;
 
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::tracepoint_fork_lv);
+    update_tracking(pid_tgid, ProgId::tracepoint_fork_lv);
 
     let orig_pid = probe
         .read_at::<u32>(24)

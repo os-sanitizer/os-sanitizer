@@ -3,6 +3,9 @@ members = ["os-sanitizer", "os-sanitizer-common", "os-sanitizer-ebpf", "os-sanit
 default-members = ["os-sanitizer", "os-sanitizer-common", "os-sanitizer-symbolizer"]
 resolver = "2"
 
+[workspace.package]
+edition = "2024"
+
 [profile.dev]
 opt-level = 3
 debug = true

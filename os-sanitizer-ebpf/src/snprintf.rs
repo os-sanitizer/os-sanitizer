@@ -12,7 +12,7 @@ use aya_ebpf_macros::{fentry, map, uprobe, uretprobe};
 
 use os_sanitizer_common::OsSanitizerError::{CouldntGetComm, MissingArg, Unreachable};
 use os_sanitizer_common::{
-    OsSanitizerError, OsSanitizerReport, PassId, SnprintfViolation, EXECUTABLE_LEN,
+    OsSanitizerError, OsSanitizerReport, ProgId, SnprintfViolation, EXECUTABLE_LEN,
 };
 
 use crate::statistics::update_tracking;
@@ -24,7 +24,7 @@ static SNPRINTF_SAFE_WRAPPED: LruHashMap<u64, u8> = LruHashMap::with_max_entries
 #[uprobe]
 fn uprobe_snprintf_safe_wrapper(probe: ProbeContext) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::uprobe_snprintf_safe_wrapper);
+    update_tracking(pid_tgid, ProgId::uprobe_snprintf_safe_wrapper);
 
     match SNPRINTF_SAFE_WRAPPED.insert(&pid_tgid, &0, 0) {
         Ok(_) => 0,
@@ -39,7 +39,7 @@ fn uprobe_snprintf_safe_wrapper(probe: ProbeContext) -> u32 {
 #[uretprobe]
 fn uretprobe_snprintf_safe_wrapper(_probe: RetProbeContext) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::uretprobe_snprintf_safe_wrapper);
+    update_tracking(pid_tgid, ProgId::uretprobe_snprintf_safe_wrapper);
 
     let _ = SNPRINTF_SAFE_WRAPPED.remove(&pid_tgid); // don't care if this fails
     0
@@ -64,7 +64,7 @@ fn uprobe_snprintf(probe: ProbeContext) -> u32 {
 #[inline(always)]
 unsafe fn try_uprobe_snprintf(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::uprobe_snprintf);
+    update_tracking(pid_tgid, ProgId::uprobe_snprintf);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(0);
@@ -95,7 +95,7 @@ fn uretprobe_snprintf(probe: RetProbeContext) -> u32 {
 #[inline(always)]
 unsafe fn try_uretprobe_snprintf(probe: &RetProbeContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::uretprobe_snprintf);
+    update_tracking(pid_tgid, ProgId::uretprobe_snprintf);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(0);
@@ -197,7 +197,7 @@ fn fentry_vfs_write_snprintf(ctx: FEntryContext) -> u32 {
 #[inline(always)]
 unsafe fn try_fentry_vfs_write_snprintf(ctx: &FEntryContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::fentry_vfs_write_snprintf);
+    update_tracking(pid_tgid, ProgId::fentry_vfs_write_snprintf);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(0);
@@ -220,7 +220,7 @@ fn uprobe_xsputn_sprintf(probe: ProbeContext) -> u32 {
 #[inline(always)]
 unsafe fn try_uprobe_xsputn_sprintf(probe: &ProbeContext) -> Result<u32, OsSanitizerError> {
     let pid_tgid = bpf_get_current_pid_tgid();
-    update_tracking(pid_tgid, PassId::uprobe_xsputn_sprintf);
+    update_tracking(pid_tgid, ProgId::uprobe_xsputn_sprintf);
 
     if IGNORED_PIDS.get(&((pid_tgid >> 32) as u32)).is_some() {
         return Ok(0);
