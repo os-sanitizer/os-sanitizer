@@ -7,7 +7,7 @@ Your mileage may vary.
 
 1. Install clang (you need at least libclang.so) of your choice.
 2. Install Rust *nightly*: https://rustup.rs/
-3. Install bpf-linker: `cargo install --force --git https://github.com/aya-rs/bpf-linker`
+3. Install bpf-linker: `cargo install --force --git https://github.com/aya-rs/bpf-linker bpf-linker`
 4. Install `bpftool` for your system (e.g., for Ubuntu: `sudo apt install linux-tools-common`)
 5. Install `aya-tool`: `cargo install bindgen-cli; cargo install --git https://github.com/aya-rs/aya aya-tool`
 
