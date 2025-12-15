@@ -108,9 +108,7 @@ unsafe fn try_uretprobe_snprintf(probe: &RetProbeContext) -> Result<u32, OsSanit
     if let Some(&(destptr, size)) = SNPRINTF_INTERMEDIARY_MAP.get(&pid_tgid) {
         let _ = SNPRINTF_INTERMEDIARY_MAP.remove(&pid_tgid); // don't care if this fails
 
-        let computed: c_int = probe
-            .ret()
-            .ok_or(Unreachable("no return value for snprintf"))?;
+        let computed = probe.ret::<c_int>();
 
         let stack_id = crate::report_stack_id(probe, "printf-mutability")?;
 

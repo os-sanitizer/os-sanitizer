@@ -18,7 +18,6 @@ use aya_ebpf::programs::ProbeContext;
 use aya_log_ebpf::{debug, error, info, warn};
 use core::ffi::c_ulong;
 use core::hint::unreachable_unchecked;
-use core::ptr::write_bytes;
 
 use os_sanitizer_common::CopyViolation::Strlen;
 use os_sanitizer_common::OsSanitizerError::*;
@@ -208,7 +207,7 @@ pub(crate) unsafe fn report_stack_id<C: EbpfContext>(
     op: &'static str,
 ) -> Result<u64, OsSanitizerError> {
     STACK_MAP
-        .get_stackid(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
+        .get_stackid::<C>(ctx, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
         .map_err(|e| CouldntRecoverStack(op, e))
         .map(|i| i as u64)
 }
@@ -222,7 +221,7 @@ pub(crate) unsafe fn read_str(
         .get_ptr_mut(0)
         .ok_or(CouldntAccessBuffer("emit-report"))?;
     let buf = &mut *ptr;
-    write_bytes(buf.as_mut_ptr(), 0, buf.len());
+    buf.fill(0);
     let mut res = -1;
     for _ in 0..32 {
         res = bpf_probe_read_user_str(
@@ -279,7 +278,7 @@ macro_rules! always_bad_call {
                 update_tracking(pid_tgid, ProgId::[< uprobe_ $name >]);
 
                 let stack_id = STACK_MAP
-                    .get_stackid(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
+                    .get_stackid::<ProbeContext>(probe, (BPF_F_USER_STACK | BPF_F_REUSE_STACKID) as u64)
                     .map_err(|e| CouldntRecoverStack(stringify!($name), e))? as u64;
 
                 let mut executable = [0u8; EXECUTABLE_LEN];

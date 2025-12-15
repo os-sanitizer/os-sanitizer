@@ -16,7 +16,7 @@ use os_sanitizer_common::{OsSanitizerError, ProgId};
 
 use crate::binding::filename;
 use crate::statistics::update_tracking;
-use crate::{read_str, ACCESS_MAP};
+use crate::{ACCESS_MAP, read_str};
 
 #[fentry(function = "do_statx")]
 fn fentry_do_statx(probe: FEntryContext) -> u32 {

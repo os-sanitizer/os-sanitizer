@@ -68,9 +68,7 @@ unsafe fn try_uretprobe_strlen(probe: &RetProbeContext) -> Result<u32, OsSanitiz
         return Ok(0);
     }
 
-    let srclen: size_t = probe
-        .ret()
-        .ok_or(Unreachable("strlen has a return value"))?;
+    let srclen: size_t = probe.ret();
 
     let Some(&strptr) = STRLEN_PTR_MAP.get(&pid_tgid) else {
         return Ok(0);
