@@ -283,7 +283,7 @@ struct Args {
     )]
     leaky_vessel: bool,
 
-    #[arg(long, help = "Enable all reporting strategies except --leaky-vessel")]
+    #[arg(long, help = "Enable all reporting strategies except --leaky-vessel and --toctou-2005")]
     all: bool,
 
     #[arg(
@@ -322,8 +322,6 @@ async fn main() -> Result<(), anyhow::Error> {
         args.filep_unlocked = true;
         args.fixed_mmap = true;
         args.interceptable_path = true;
-        args.leaky_vessel = true;
-        args.toctou_2005 = true;
     }
 
     if args.reference_policy {
@@ -342,7 +340,6 @@ async fn main() -> Result<(), anyhow::Error> {
         args.filep_unlocked = true;
         args.fixed_mmap = true;
         args.interceptable_path = true;
-        args.leaky_vessel = true;
     }
 
     if !(args.access
