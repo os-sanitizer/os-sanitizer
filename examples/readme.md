@@ -22,7 +22,7 @@ $ errno 5
 
 ## `access`
 
-The purpose of this pass is to detect TOCTOU vulnerabilities associated with syscalls which access and open user-specified files, namely `do_faccessat`, `vfs_statat, do_statx, and do_sys_openat2.
+The purpose of this pass is to detect TOCTOU vulnerabilities associated with syscalls which access and open user-specified files, namely `do_faccessat`, `vfs_statat`, `do_statx`, and `do_sys_openat2`.
 
 In the microbenchmark, a local file is accessed by the `access(2)` function, then opened with `open(2)` before being closed with `close(2)` each iteration.
 
