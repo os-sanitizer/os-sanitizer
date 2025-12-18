@@ -15,7 +15,7 @@ fn main() -> anyhow::Result<()> {
         manifest_path,
         ..
     } = ebpf_package;
-    let ebpf_package = aya_build::Package {
+    let mut ebpf_package = aya_build::Package {
         name: name.as_str(),
         root_dir: manifest_path
             .parent()
@@ -23,5 +23,10 @@ fn main() -> anyhow::Result<()> {
             .as_str(),
         ..Default::default()
     };
+
+    if cfg!(feature = "tracking") {
+        ebpf_package.features = &["tracking"];
+    }
+
     aya_build::build_ebpf([ebpf_package], Toolchain::default())
 }

@@ -1322,7 +1322,9 @@ async fn main() -> Result<(), anyhow::Error> {
         );
     }
 
-    attach_tracepoint!(bpf, "sched_exit_stats", ["sched", "sched_process_exit"]);
+    if cfg!(feature = "tracking") {
+        attach_tracepoint!(bpf, "sched_exit_stats", ["sched", "sched_process_exit"]);
+    }
 
     signal::ctrl_c().await?;
     tx.send(())?;
@@ -1334,19 +1336,21 @@ async fn main() -> Result<(), anyhow::Error> {
     let global_statistics: AyaArray<_, u64> =
         AyaArray::try_from(bpf.take_map("GLOBAL_STATISTICS").unwrap())?;
 
-    println!("Pass,ERROR,WARN,INFO,DEBUG,TRACE,Observations");
-    for (pass, (repr, counts)) in &*counters_map {
-        println!(
-            "{pass},{},{}",
-            counts
-                .iter()
-                .map(|count| format!("{}", count.load(Ordering::Acquire)))
-                .collect::<Vec<_>>()
-                .join(","),
-            repr.iter()
-                .map(|idx| { global_statistics.get(&(*idx as u32), 0).unwrap() })
-                .sum::<u64>()
-        );
+    if cfg!(feature = "tracking") {
+        println!("Pass,ERROR,WARN,INFO,DEBUG,TRACE,Observations");
+        for (pass, (repr, counts)) in &*counters_map {
+            println!(
+                "{pass},{},{}",
+                counts
+                    .iter()
+                    .map(|count| format!("{}", count.load(Ordering::Acquire)))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                repr.iter()
+                    .map(|idx| { global_statistics.get(&(*idx as u32), 0).unwrap() })
+                    .sum::<u64>()
+            );
+        }
     }
 
     Ok(())
