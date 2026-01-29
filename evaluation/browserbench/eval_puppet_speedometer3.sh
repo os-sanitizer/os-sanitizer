@@ -19,11 +19,12 @@ do
     do
 	    echo "Iteration $i"
 	    # Check if os-san is already running -> We should not do evaluation in that case.
-	    if pgrep os-sanitizer
-	    then
+	    while pgrep os-sanitizer
+	    do
 		    echo "Another instance of os-sanitizer is already running! Please close it to run evaluations.";
-		    exit 1;
-	    fi
+		    sudo pkill os-sanitizer
+                    sleep 10
+	    done
 
 	    if [[ "os_san_type" == "none" ]]; then
 		    echo "Without os-sanitizer run $i"
