@@ -1,7 +1,7 @@
 #ifndef COMMON_H
 #define COMMON_H
 
-void sigint_handler();
+void sigint_handler(int sig);
 
 #ifdef MICROBENCHMARK
 #include <signal.h>
