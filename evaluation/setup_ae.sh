@@ -20,7 +20,15 @@ if [[ ! "$KERNEL_VERSION" =~ ^6\.14\.0 ]]; then
     echo "[WARN] Expected kernel version 6.14.0-*, but found $KERNEL_VERSION"
     echo "       Older kernels (<~ 6.11) have a buggy uretprobe implementation when using AVX-512."
     echo "       Newer kernels (>~ 6.18) have changed kernel structs and are not currently supported"
+    echo "       -> https://github.com/os-sanitizer/os-sanitizer/issues/2"
 fi
+
+# NOTE: Disk usage (via vagrant cloud-image/fedora-42)
+#       unmodified 2.7G
+#       after `base` 4.9G
+#       after `cargo clean` 4.7G
+#       after `spec`: 6.0G
+#       after `browserbench`: 7.4G
 
 case "$1" in
     base)
@@ -42,7 +50,10 @@ case "$1" in
         cargo build --release
         sudo cp target/release/os-sanitizer /usr/local/bin/
         sudo cp target/release/os-sanitizer-symbolizer /usr/local/bin/
+        cargo clean
         popd
+
+        make -C "$OS_SAN_PATH/examples"
 
         os-sanitizer --version
         ;;
@@ -75,7 +86,7 @@ case "$1" in
 
     browserbench)
         set +x
-        sudo dnf install -y nodejs git
+        sudo dnf install -y nodejs git chromium
         npm install puppeteer
         ;;
 
