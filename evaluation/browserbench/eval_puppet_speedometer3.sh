@@ -26,7 +26,7 @@ do
                     sleep 10
 	    done
 
-	    if [[ "os_san_type" == "none" ]]; then
+	    if [[ "$os_san_type" == "none" ]]; then
 		    echo "Without os-sanitizer run $i"
 		    /usr/bin/time -v node speedometer3_run.js > results/speedometer_log_${i}_${os_san_type}_${info_tag} 2>&1  		
     	else
